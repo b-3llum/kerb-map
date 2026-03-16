@@ -1,0 +1,183 @@
+# kerb-map
+
+```
+  _  __         _       __  __
+ | |/ /        | |     |  \/  |
+ | ' / ___ _ __| |__   | \  / | __ _ _ __
+ |  < / _ \ '__| '_ \  | |\/| |/ _` | '_ \
+ | . \  __/ |  | |_) | | |  | | (_| | |_) |
+ |_|\_\___|_|  |_.__/  |_|  |_|\__,_| .__/
+                                      |_|
+```
+
+**Active Directory Kerberos Attack Surface Mapper**
+
+![version](https://img.shields.io/badge/version-1.0.0-blue)
+![python](https://img.shields.io/badge/python-3.10+-blue)
+![platform](https://img.shields.io/badge/platform-Linux-lightgrey)
+![license](https://img.shields.io/badge/license-MIT-lightgrey)
+![built with](https://img.shields.io/badge/built%20with-impacket-orange)
+
+---
+
+## Overview
+
+**kerb-map** is a post-initial-access Active Directory enumeration tool that consolidates every Kerberos-related attack surface into a single authenticated scan session. Rather than running a collection of impacket scripts manually, kerb-map produces a **ranked, prioritised attack path list** with the exact next command to execute — bridging the gap between enumeration and exploitation.
+
+All LDAP queries are read-only. RPC-based CVE probes that generate Windows events are gated behind an explicit `--aggressive` flag.
+
+---
+
+## Documentation
+[View Manual (PDF)](kerb-map-manual.pdf)
+
+---
+
+## Modules
+
+| Module | Flag | Description |
+|---|---|---|
+| SPN Scanner | `--spn` | Finds all Kerberoastable accounts. Scores each 0–100 by RC4 support, password age, admin membership and service type |
+| AS-REP Scanner | `--asrep` | Accounts with Kerberos pre-authentication disabled. No credentials needed to roast |
+| Delegation Mapper | `--delegation` | Maps Unconstrained, Constrained (with S4U2Self detection), and RBCD across the domain |
+| User Enumerator | `--users` | Privileged users, stale accounts, password policy, DnsAdmins, domain trusts, LAPS status |
+| CVE Scanner | `--cves` | ZeroLogon, noPac, PrintNightmare, PetitPotam, AD CS ESC1–ESC8, MS14-068 |
+| Scorer | auto | Cross-correlates all findings into a single ranked hit list with pre-filled exploit commands |
+
+---
+
+## Installation
+
+### Prerequisites
+- Python 3.10 or higher
+- Network access to TCP 389 (LDAP) on the Domain Controller
+- TCP 135 + named pipes required only for `--aggressive` CVE probes
+
+---
+
+### Option A — pipx (recommended)
+
+Installs kerb-map into an isolated virtualenv and exposes the `kerb-map` command globally from any directory.
+
+```bash
+# Install pipx if not already present
+sudo apt install pipx       # Debian / Kali
+sudo pacman -S python-pipx  # Arch
+pipx ensurepath
+
+# Clone and install
+git clone https://github.com/b-3llum/kerb-map /opt/kerb-map
+pipx install /opt/kerb-map
+
+# Reload shell
+source ~/.zshrc   # or ~/.bashrc
+
+# Verify
+kerb-map --help
+```
+
+> **Note:** If pipx fails due to impacket dependency conflicts, use Option B below.
+
+---
+
+### Option B — shell wrapper (simplest)
+
+```bash
+git clone https://github.com/b-3llum/kerb-map /opt/kerb-map
+pip install -r /opt/kerb-map/requirements.txt
+
+sudo bash -c 'printf "#!/usr/bin/env bash\nexec python /opt/kerb-map/kerb-map.py \"\$@\"\n" \
+  > /usr/local/bin/kerb-map'
+sudo chmod +x /usr/local/bin/kerb-map
+```
+
+---
+
+### Option C — symlink
+
+```bash
+chmod +x /opt/kerb-map/kerb-map.py
+sudo ln -s /opt/kerb-map/kerb-map.py /usr/local/bin/kerb-map
+```
+
+---
+
+## Usage
+
+### Authentication
+
+```bash
+# Password
+kerb-map -d corp.local -dc 192.168.1.10 -u jsmith -p Password123
+
+# Pass-the-Hash (LM:NT or NT only)
+kerb-map -d corp.local -dc 192.168.1.10 -u jsmith -H <NT_HASH>
+
+# Kerberos ccache
+export KRB5CCNAME=/tmp/jsmith.ccache
+kerb-map -d corp.local -dc 192.168.1.10 -u jsmith -k
+```
+
+### Common Examples
+
+```bash
+# Full scan — all modules, safe CVE checks only
+kerb-map -d corp.local -dc 192.168.1.10 -u jsmith -p Password123 --all --cves
+
+# Full scan + aggressive RPC CVE probes + JSON export
+kerb-map -d corp.local -dc 192.168.1.10 -u jsmith -p Password123 \
+    --all --cves --aggressive -o json
+
+# Stealth mode — LDAP jitter, no RPC probes
+kerb-map -d corp.local -dc 192.168.1.10 -u jsmith -p Password123 --stealth
+
+# CVE checks only
+kerb-map -d corp.local -dc 192.168.1.10 -u jsmith -p Password123 --cves
+
+# View stored scan history
+kerb-map --list-scans
+kerb-map --show-scan 3
+```
+
+### Full Flag Reference
+
+| Flag | Description |
+|---|---|
+| `-d / --domain` | Target domain (e.g. corp.local) |
+| `-dc / --dc-ip` | Domain controller IP |
+| `-u / --username` | Domain username |
+| `-p / --password` | Plaintext password |
+| `-H / --hash` | NTLM hash — LM:NT or NT only |
+| `-k / --kerberos` | Use ccache ticket (set KRB5CCNAME first) |
+| `--all` | Run all modules (default if no module flag given) |
+| `--spn / --asrep / --delegation / --users / --cves` | Run specific modules only |
+| `--aggressive` | Enable RPC CVE probes — generates Windows Event 5145 |
+| `--stealth` | Add random jitter between LDAP queries |
+| `-o json / bloodhound` | Write results to file |
+| `--top N` | Show top N priority targets (default 15) |
+| `--no-cache` | Do not save to local SQLite database |
+| `--list-scans` | List all cached scans |
+| `--show-scan ID` | Replay findings from a stored scan |
+
+---
+
+## Detection Profile
+
+| Module | Noise | Event IDs | MDI Detection |
+|---|---|---|---|
+| LDAP enumeration (all safe checks) | 🟢 LOW | 1644 (if diag logging on) | No |
+| Kerberoasting w/ AES tickets | 🟡 MEDIUM | 4769 per ticket | Possible |
+| Kerberoasting w/ RC4 tickets | 🔴 HIGH | 4769 (enc type 0x17) | Yes |
+| ZeroLogon RPC probe | 🔴 HIGH | 5827 / 5828 | Yes |
+| PrintNightmare pipe probe | 🔴 HIGH | 5145 | Yes |
+| PetitPotam EFS probe | 🔴 HIGH | 5145 | Yes |
+
+> **Note:** The `--aggressive` flag enables all HIGH-noise RPC probes. Only use it when your engagement scope explicitly permits noisy testing.
+
+---
+
+## Legal
+
+kerb-map is designed exclusively for use in **authorised** penetration testing engagements and red team operations where written permission has been obtained from the system owner.
+
+Use against systems for which you do not have explicit written authorisation is illegal under the Computer Fraud and Abuse Act (CFAA), the UK Computer Misuse Act, and equivalent legislation worldwide. The author assumes no liability for misuse.
