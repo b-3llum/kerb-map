@@ -35,14 +35,15 @@ A full user manual covering all modules, CVE detection methods, detection profil
 
 ---
 
-| Module | Flag | Description |
-|---|---|---|
-| SPN Scanner | `--spn` | Kerberoastable accounts, scored 0–100 |
-| AS-REP Scanner | `--asrep` | Pre-auth disabled — no creds needed |
-| Delegation Mapper | `--delegation` | Unconstrained, Constrained, RBCD |
-| User Enumerator | `--users` | Privesc users, policy, DnsAdmins, LAPS |
-| CVE Scanner | `--cves` | ZeroLogon, noPac, PrintNightmare + more |
-| Scorer | `auto` | Ranked attack path list, pre-filled commands |
+## Modules
+
+    --spn          Kerberoastable account discovery & scoring
+    --asrep        AS-REP roastable accounts (no creds needed)
+    --delegation   Unconstrained / Constrained / RBCD mapping
+    --users        Privileged users, policy, DnsAdmins, LAPS
+    --cves         CVE detection (ZeroLogon, noPac, ESC1-8...)
+    --aggressive   Enable RPC probes (louder — Event 5145)
+    -o json        Export results to JSON or BloodHound format
 
 ---
 
