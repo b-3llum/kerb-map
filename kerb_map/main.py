@@ -1,17 +1,11 @@
-import sys
-import os
-import importlib.util
+"""
+Entry point for pipx / pip install.
+Delegates everything to kerb_map.cli which contains the full CLI logic.
+"""
 
 def main():
-    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    sys.path.insert(0, root)
-    spec = importlib.util.spec_from_file_location(
-        "kerb_map_cli",
-        os.path.join(root, "kerb-map.py")
-    )
-    mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
-    mod.main()
+    from kerb_map.cli import main as _main
+    _main()
 
 if __name__ == "__main__":
     main()
