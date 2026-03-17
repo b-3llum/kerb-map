@@ -41,7 +41,7 @@ A full user manual covering all modules, CVE detection methods, detection profil
 |---|---|---|
 | SPN Scanner | `--spn  ` | Finds all Kerberoastable accounts. Scores each 0–100 by RC4 support, password age, admin membership and service type |
 | AS-REP Scanner | `--asrep  ` | Accounts with Kerberos pre-authentication disabled. No credentials needed to roast |
-| Delegation Mapper | `--delegation  ` | Maps Unconstrained, Constrained (with S4U2Self detection), and RBCD across the domain |
+| Delegation Mapper | `--delegation   ` | Maps Unconstrained, Constrained (with S4U2Self detection), and RBCD across the domain |
 | User Enumerator | `--users  ` | Privileged users, stale accounts, password policy, DnsAdmins, domain trusts, LAPS status |
 | CVE Scanner | `--cves  ` | ZeroLogon, noPac, PrintNightmare, PetitPotam, AD CS ESC1–ESC8, MS14-068 |
 | Scorer | `auto  ` | Cross-correlates all findings into a single ranked hit list with pre-filled exploit commands |
