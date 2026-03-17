@@ -1,14 +1,6 @@
 # kerb-map
 
-```
-  _  __         _       __  __
- | |/ /        | |     |  \/  |
- | ' / ___ _ __| |__   | \  / | __ _ _ __
- |  < / _ \ '__| '_ \  | |\/| |/ _` | '_ \
- | . \  __/ |  | |_) | | |  | | (_| | |_) |
- |_|\_\___|_|  |_.__/  |_|  |_|\__,_| .__/
-                                      |_|
-```
+![kerb-map](https://raw.githubusercontent.com/b-3llum/kerb-map/main/assets/banner.png)
 
 **Active Directory Kerberos Attack Surface Mapper**
 
