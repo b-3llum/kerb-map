@@ -29,8 +29,9 @@ All LDAP queries are read-only. RPC-based CVE probes that generate Windows event
 
 ## Documentation
 A full user manual covering all modules, CVE detection methods, detection profile, and engagement workflow is available:
-**[View Manual Online](https://docs.google.com/viewer?url=https://raw.githubusercontent.com/b-3llum/kerb-map/main/kerb-map-manual.docx)** — Google Docs viewer (no account required)
-[View Manual (PDF)](kerb-map-manual.pdf)
+
+- **[View Manual Online](https://docs.google.com/viewer?url=https://raw.githubusercontent.com/b-3llum/kerb-map/main/kerb-map-manual.docx)** — Google Docs viewer (no account required)
+- [View Manual (PDF)](kerb-map-manual.pdf)
 
 ---
 
