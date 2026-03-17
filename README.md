@@ -59,8 +59,8 @@ sudo pacman -S python-pipx  # Arch
 pipx ensurepath
 
 # Clone and install
-git clone https://github.com/b-3llum/kerb-map /opt/kerb-map
-pipx install /opt/kerb-map
+git clone https://github.com/b-3llum/kerb-map ~/kerb-map
+pipx install ~/kerb-map
 
 # Reload shell
 source ~/.zshrc   # or ~/.bashrc
@@ -76,10 +76,10 @@ kerb-map --help
 ### Option B — shell wrapper (simplest)
 
 ```bash
-git clone https://github.com/b-3llum/kerb-map /opt/kerb-map
-pip install -r /opt/kerb-map/requirements.txt
+git clone https://github.com/b-3llum/kerb-map ~/kerb-map
+pip install -r ~/kerb-map/requirements.txt
 
-sudo bash -c 'printf "#!/usr/bin/env bash\nexec python /opt/kerb-map/kerb-map.py \"\$@\"\n" \
+sudo bash -c 'printf "#!/usr/bin/env bash\nexec python ~/kerb-map/kerb-map.py \"\$@\"\n" \
   > /usr/local/bin/kerb-map'
 sudo chmod +x /usr/local/bin/kerb-map
 ```
@@ -89,8 +89,8 @@ sudo chmod +x /usr/local/bin/kerb-map
 ### Option C — symlink
 
 ```bash
-chmod +x /opt/kerb-map/kerb-map.py
-sudo ln -s /opt/kerb-map/kerb-map.py /usr/local/bin/kerb-map
+chmod +x ~/kerb-map/kerb-map.py
+sudo ln -s ~/kerb-map/kerb-map.py /usr/local/bin/kerb-map
 ```
 
 ---
