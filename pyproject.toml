@@ -11,3 +11,6 @@ dependencies = ["ldap3", "impacket", "rich"]
 
 [project.scripts]
 kerb-map = "kerb_map.main:main"
+
+[tool.setuptools.packages.find]
+include = ["kerb_map*"]
