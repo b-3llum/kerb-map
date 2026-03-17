@@ -16,8 +16,7 @@
 ![python](https://img.shields.io/badge/python-3.10+-blue)
 ![platform](https://img.shields.io/badge/platform-Linux-lightgrey)
 ![license](https://img.shields.io/badge/license-MIT-lightgrey)
-![built with](https://img.shields.io/badge/built%20with-impacket-orange)
-
+[![Manual](https://img.shields.io/badge/Manual-View%20Online-blue)](https://docs.google.com/viewer?url=https://raw.githubusercontent.com/b-3llum/kerb-map/main/kerb-map-manual.docx)
 ---
 
 ## Overview
@@ -29,6 +28,8 @@ All LDAP queries are read-only. RPC-based CVE probes that generate Windows event
 ---
 
 ## Documentation
+A full user manual covering all modules, CVE detection methods, detection profile, and engagement workflow is available:
+**[View Manual Online](https://docs.google.com/viewer?url=https://raw.githubusercontent.com/b-3llum/kerb-map/main/kerb-map-manual.docx)** — Google Docs viewer (no account required)
 [View Manual (PDF)](kerb-map-manual.pdf)
 
 ---
