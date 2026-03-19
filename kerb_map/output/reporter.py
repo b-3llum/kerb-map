@@ -153,7 +153,7 @@ def print_spn_results(spns: List[Dict]):
 
         table.add_row(
             s["account"],
-            ", ".join(s.get("spn_types", [])),
+            ", ".join(spn.split("/")[0] for spn in s.get("spns", [])),
             age,
             rc4, adm,
             f"[{sc_color}]{sc}[/{sc_color}]",

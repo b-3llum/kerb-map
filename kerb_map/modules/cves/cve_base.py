@@ -65,6 +65,19 @@ class CVEBase(ABC):
     def check(self) -> CVEResult:
         pass
 
+    def _not_vulnerable(self, cve_id: str, name: str, severity: Severity, reason: str) -> CVEResult:
+        """Return a standard CVEResult for non-vulnerable / skipped checks."""
+        return CVEResult(
+            cve_id=cve_id,
+            name=name,
+            severity=severity,
+            vulnerable=False,
+            reason=reason,
+            evidence={},
+            remediation="N/A",
+            next_step="",
+        )
+
     @property
     def name(self) -> str:
         return self.__class__.__name__

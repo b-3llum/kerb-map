@@ -3,7 +3,7 @@ SPN Scanner — finds all Kerberoastable accounts and scores them by crackabilit
 Score factors: encryption type, password age, admin membership, SPN type.
 """
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, asdict
 from datetime import datetime, timezone
 from typing import List, Optional
 
@@ -64,7 +64,11 @@ class SPNScanner:
             account.crack_priority = self._priority_label(account.crack_score)
             results.append(account)
 
-        return sorted(results, key=lambda x: x.crack_score, reverse=True)
+        return sorted(
+            [asdict(account) for account in results],
+            key=lambda x: x["crack_score"],
+            reverse=True,
+        )
 
     # ------------------------------------------------------------------ #
 

@@ -3,7 +3,7 @@ AS-REP Roasting scanner — finds accounts with Kerberos pre-auth disabled.
 These can be attacked without ANY credentials at all.
 """
 
-from dataclasses import dataclass
+from dataclasses import dataclass, asdict
 from datetime import datetime, timezone
 from typing import List, Optional
 
@@ -63,7 +63,11 @@ class ASREPScanner:
             acct.crack_score = self._score(acct)
             results.append(acct)
 
-        return sorted(results, key=lambda x: x.crack_score, reverse=True)
+        return sorted(
+            [asdict(acct) for acct in results],
+            key=lambda x: x["crack_score"],
+            reverse=True,
+        )
 
     def _score(self, a: ASREPAccount) -> int:
         # No creds needed makes ALL AS-REP targets high priority base

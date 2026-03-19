@@ -299,7 +299,7 @@ def run_scan(args):
     # ── File export ───────────────────────────────────────────────
     if args.output:
         ts  = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-        ext = "json" if args.output == "json" else "json"
+        ext = "json" if args.output == "json" else "bloodhound.json"
         default_name = f"kerb-map_{args.domain}_{ts}.{ext}"
         outfile      = args.outfile or default_name
 
