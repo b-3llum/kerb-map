@@ -6,7 +6,7 @@ Every check returns a standardised CVEResult dataclass.
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Dict, Any
+from typing import Dict, Any, List
 
 
 class Severity(Enum):
@@ -36,7 +36,23 @@ class CVEResult:
     evidence:    Dict[str, Any]
     remediation: str
     next_step:   str
-    noise_level: str = "LOW"   # LOW / MEDIUM / HIGH
+    noise_level: str  = "LOW"   # LOW / MEDIUM / HIGH
+    references:  List[str] = field(default_factory=list)  # Fix: was missing, caused unexpected kwarg crash
+
+    def to_dict(self) -> Dict[str, Any]:
+        """Fix: callers in cli.py call r.to_dict() — dataclass has no such method by default."""
+        return {
+            "cve_id":      self.cve_id,
+            "name":        self.name,
+            "severity":    self.severity.value,   # serialize enum to string
+            "vulnerable":  self.vulnerable,
+            "reason":      self.reason,
+            "evidence":    self.evidence,
+            "remediation": self.remediation,
+            "next_step":   self.next_step,
+            "noise_level": self.noise_level,
+            "references":  self.references,
+        }
 
 
 class CVEBase(ABC):
