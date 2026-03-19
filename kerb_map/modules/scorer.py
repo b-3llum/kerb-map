@@ -6,7 +6,8 @@ from typing import List, Dict, Any
 
 
 class Scorer:
-    def rank(self, spns, asrep, delegations, cve_results, user_data) -> List[Dict]:
+    def rank(self, spns, asrep, delegations, cve_results, user_data,
+             enc_audit=None, trusts=None) -> List[Dict]:
         targets = []
 
         for spn in spns:
@@ -93,6 +94,39 @@ class Scorer:
                     "next_step":f"# SID history injection across trust to {t['trusted_domain']}",
                     "category":"trust",
                 })
+
+        # Encryption audit findings
+        if enc_audit:
+            for dc in enc_audit.weak_dcs:
+                targets.append({
+                    "target": dc.account, "attack": "Weak DC Encryption (RC4/DES)",
+                    "priority": 65, "severity": "HIGH",
+                    "reason": f"DC supports weak encryption: {', '.join(dc.enc_types)}",
+                    "next_step": "# Downgrade attacks possible — force RC4 in Kerberos exchanges",
+                    "category": "encryption",
+                })
+            for a in enc_audit.des_accounts[:5]:
+                targets.append({
+                    "target": a.account, "attack": "DES Encryption Enabled",
+                    "priority": 60, "severity": "HIGH",
+                    "reason": f"Account uses DES — trivially crackable: {', '.join(a.enc_types)}",
+                    "next_step": "# DES keys are trivially brute-forced",
+                    "category": "encryption",
+                })
+
+        # Detailed trust findings from TrustMapper
+        if trusts:
+            for t in trusts:
+                if t.risk in ("CRITICAL", "HIGH"):
+                    targets.append({
+                        "target": t.trust_partner,
+                        "attack": f"Trust Abuse ({t.direction})",
+                        "priority": 90 if t.risk == "CRITICAL" else 75,
+                        "severity": t.risk,
+                        "reason": t.note,
+                        "next_step": f"# Pivot via trust to {t.trust_partner}",
+                        "category": "trust",
+                    })
 
         targets.sort(key=lambda x: x["priority"], reverse=True)
         seen, unique = set(), []

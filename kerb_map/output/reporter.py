@@ -334,6 +334,81 @@ def print_user_results(user_data: Dict):
 
 
 # ──────────────────────────────────────────────────────────────────────────────
+# Encryption Audit Results
+# ──────────────────────────────────────────────────────────────────────────────
+
+def print_enc_audit_results(audit):
+    console.rule("[bold cyan]Kerberos Encryption Audit[/bold cyan]")
+
+    if not audit:
+        console.print("  [dim]Encryption audit skipped.[/dim]\n")
+        return
+
+    if audit.des_accounts:
+        console.print(f"  [bold red]DES Encryption ({len(audit.des_accounts)} account(s)) — CRITICAL:[/bold red]")
+        for a in audit.des_accounts[:5]:
+            console.print(f"    [red]![/red] {a.account}  ({', '.join(a.enc_types)})")
+        if len(audit.des_accounts) > 5:
+            console.print(f"    [dim]... and {len(audit.des_accounts) - 5} more[/dim]")
+        console.print()
+
+    if audit.rc4_only_accounts:
+        console.print(f"  [bold yellow]RC4-Only Accounts ({len(audit.rc4_only_accounts)}):[/bold yellow]")
+        for a in audit.rc4_only_accounts[:5]:
+            console.print(f"    [yellow]![/yellow] {a.account}  ({', '.join(a.enc_types)})")
+        if len(audit.rc4_only_accounts) > 5:
+            console.print(f"    [dim]... and {len(audit.rc4_only_accounts) - 5} more[/dim]")
+        console.print()
+
+    if audit.weak_dcs:
+        console.print(f"  [bold red]DCs with RC4 Enabled ({len(audit.weak_dcs)}):[/bold red]")
+        for dc in audit.weak_dcs:
+            console.print(f"    [red]![/red] {dc.account}  ({', '.join(dc.enc_types)})")
+        console.print()
+
+    if not audit.des_accounts and not audit.rc4_only_accounts and not audit.weak_dcs:
+        console.print("  [green]No weak encryption configurations found.[/green]\n")
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Domain Trust Results
+# ──────────────────────────────────────────────────────────────────────────────
+
+def print_trust_results(trusts):
+    console.rule("[bold cyan]Domain Trusts[/bold cyan]")
+
+    if not trusts:
+        console.print("  [green]No domain trusts found.[/green]\n")
+        return
+
+    table = Table(box=box.SIMPLE_HEAD, header_style="bold cyan")
+    table.add_column("Trust Partner", width=30)
+    table.add_column("Direction",     width=25)
+    table.add_column("Type",          width=20)
+    table.add_column("SID Filtering", width=14, justify="center")
+    table.add_column("Risk",          width=10)
+
+    for t in trusts:
+        risk_color = {"CRITICAL": "red", "HIGH": "red", "MEDIUM": "yellow",
+                      "LOW": "green", "INFO": "blue"}.get(t.risk, "white")
+        sid = "[green]ON[/green]" if t.sid_filtering else "[red]OFF[/red]"
+        table.add_row(
+            t.trust_partner,
+            t.direction,
+            t.trust_type,
+            sid,
+            f"[{risk_color}]{t.risk}[/{risk_color}]",
+        )
+
+    console.print(table)
+    if any(t.note for t in trusts):
+        for t in trusts:
+            if t.note and t.risk in ("CRITICAL", "HIGH"):
+                console.print(f"  [red]![/red] {t.trust_partner}: {t.note}")
+    console.print()
+
+
+# ──────────────────────────────────────────────────────────────────────────────
 # Summary footer
 # ──────────────────────────────────────────────────────────────────────────────
 

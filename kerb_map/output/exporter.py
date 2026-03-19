@@ -51,14 +51,15 @@ class BloodHoundExporter:
         }
 
         nodes = []
+        domain = data.get("meta", {}).get("domain", "UNKNOWN").upper()
 
         # Kerberoastable users
         for spn in data.get("spns", []):
             nodes.append({
-                "ObjectIdentifier": f"{data.get('domain', 'UNKNOWN').upper()}\\{spn['account']}",
+                "ObjectIdentifier": f"{domain}\\{spn['account']}",
                 "ObjectType": "User",
                 "Properties": {
-                    "name":          f"{spn['account'].upper()}@{data.get('domain', '').upper()}",
+                    "name":          f"{spn['account'].upper()}@{domain}",
                     "kerberoastable": True,
                     "hasspn":        True,
                     "pwdlastset":    spn.get("password_age_days"),
@@ -70,11 +71,51 @@ class BloodHoundExporter:
         # AS-REP roastable users
         for user in data.get("asrep", []):
             nodes.append({
-                "ObjectIdentifier": f"{data.get('domain', 'UNKNOWN').upper()}\\{user['account']}",
+                "ObjectIdentifier": f"{domain}\\{user['account']}",
                 "ObjectType": "User",
                 "Properties": {
-                    "name":            f"{user['account'].upper()}@{data.get('domain', '').upper()}",
+                    "name":            f"{user['account'].upper()}@{domain}",
                     "dontreqpreauth":  True,
+                },
+                "Aces": [],
+            })
+
+        # Unconstrained delegation computers
+        delegations = data.get("delegations", {})
+        for d in delegations.get("unconstrained", []):
+            nodes.append({
+                "ObjectIdentifier": f"{domain}\\{d['account']}",
+                "ObjectType": "Computer",
+                "Properties": {
+                    "name":                    f"{d['account'].upper()}@{domain}",
+                    "unconstraineddelegation":  True,
+                    "dnshostname":             d.get("dns_name", ""),
+                },
+                "Aces": [],
+            })
+
+        # Constrained delegation
+        for d in delegations.get("constrained", []):
+            nodes.append({
+                "ObjectIdentifier": f"{domain}\\{d['account']}",
+                "ObjectType": "User",
+                "Properties": {
+                    "name":                f"{d['account'].upper()}@{domain}",
+                    "allowedtodelegate":   d.get("allowed_to", []),
+                    "trustedtoauth":       d.get("protocol_transition", False),
+                },
+                "Aces": [],
+            })
+
+        # RBCD targets
+        for d in delegations.get("rbcd", []):
+            nodes.append({
+                "ObjectIdentifier": f"{domain}\\{d['target']}",
+                "ObjectType": "Computer",
+                "Properties": {
+                    "name":        f"{d['target'].upper()}@{domain}",
+                    "rbcd":        True,
+                    "dnshostname": d.get("dns_name", ""),
                 },
                 "Aces": [],
             })

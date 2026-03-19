@@ -7,6 +7,10 @@ from kerb_map.modules.cves.nopac          import NoPac
 from kerb_map.modules.cves.printnightmare import PrintNightmare, PetitPotam
 from kerb_map.modules.cves.adcs           import ADCSAudit
 from kerb_map.modules.cves.ms14_068       import MS14068
+from kerb_map.modules.cves.gpp_passwords  import GPPPasswords
+from kerb_map.modules.cves.bronze_bit     import BronzeBit
+from kerb_map.modules.cves.certifried     import Certifried
+from kerb_map.modules.cves.ldap_signing   import LDAPSigning
 from kerb_map.output.logger import Logger
 
 log = Logger()
@@ -16,7 +20,11 @@ class CVEScanner:
     def __init__(self, ldap_client, dc_ip, domain):
         self._safe  = [NoPac(ldap_client,dc_ip,domain),
                        ADCSAudit(ldap_client,dc_ip,domain),
-                       MS14068(ldap_client,dc_ip,domain)]
+                       MS14068(ldap_client,dc_ip,domain),
+                       GPPPasswords(ldap_client,dc_ip,domain),
+                       BronzeBit(ldap_client,dc_ip,domain),
+                       Certifried(ldap_client,dc_ip,domain),
+                       LDAPSigning(ldap_client,dc_ip,domain)]
         self._loud  = [ZeroLogon(ldap_client,dc_ip,domain),
                        PrintNightmare(ldap_client,dc_ip,domain),
                        PetitPotam(ldap_client,dc_ip,domain)]

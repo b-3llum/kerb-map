@@ -26,12 +26,15 @@ from kerb_map.modules.spn_scanner       import SPNScanner
 from kerb_map.modules.asrep_scanner     import ASREPScanner
 from kerb_map.modules.delegation_mapper import DelegationMapper
 from kerb_map.modules.user_enumerator   import UserEnumerator
+from kerb_map.modules.enc_auditor       import EncAuditor
+from kerb_map.modules.trust_mapper      import TrustMapper
 from kerb_map.modules.cve_scanner       import CVEScanner
 from kerb_map.modules.scorer            import Scorer
 from kerb_map.output.reporter           import (
     print_banner, print_domain_info, print_priority_targets,
     print_spn_results, print_asrep_results, print_delegation_results,
     print_cve_results, print_user_results, print_summary,
+    print_enc_audit_results, print_trust_results,
 )
 from kerb_map.output.exporter           import JSONExporter, BloodHoundExporter
 from kerb_map.db.cache                  import Cache
@@ -94,6 +97,8 @@ Examples:
     mods.add_argument("--delegation",  action="store_true", help="Delegation mapping")
     mods.add_argument("--users",       action="store_true", help="User/policy enumeration")
     mods.add_argument("--cves",        action="store_true", help="CVE / misconfiguration checks")
+    mods.add_argument("--encryption", action="store_true", help="Weak encryption audit (RC4/DES)")
+    mods.add_argument("--trusts",     action="store_true", help="Domain trust mapping")
     mods.add_argument("--aggressive",  action="store_true",
                       help="Enable RPC-based CVE probes (louder — generates Event 5145)")
 
@@ -178,7 +183,8 @@ def run_scan(args):
 
     # ── Determine which modules to run ───────────────────────────
     run_all = args.all or not any([
-        args.spn, args.asrep, args.delegation, args.users, args.cves
+        args.spn, args.asrep, args.delegation, args.users, args.cves,
+        args.encryption, args.trusts,
     ])
 
     run_spn  = run_all or args.spn
@@ -186,6 +192,8 @@ def run_scan(args):
     run_deleg= run_all or args.delegation
     run_user = run_all or args.users
     run_cve  = run_all or args.cves
+    run_enc  = run_all or args.encryption
+    run_trust= run_all or args.trusts
 
     # ── Connect ───────────────────────────────────────────────────
     print_banner()
@@ -241,6 +249,20 @@ def run_scan(args):
         user_data = UserEnumerator(ldap).enumerate()
         print_user_results(user_data)
 
+    # ── Encryption Audit ────────────────────────────────────────────
+    enc_audit = None
+    if run_enc:
+        log.section("Kerberos Encryption Audit")
+        enc_audit = EncAuditor(ldap).audit()
+        print_enc_audit_results(enc_audit)
+
+    # ── Domain Trusts ────────────────────────────────────────────
+    trusts = []
+    if run_trust:
+        log.section("Domain Trust Mapping")
+        trusts = TrustMapper(ldap).map()
+        print_trust_results(trusts)
+
     # ── CVE Checks ────────────────────────────────────────────────
     cve_results = []
     if run_cve:
@@ -254,7 +276,8 @@ def run_scan(args):
 
     # ── Score & Rank ──────────────────────────────────────────────
     log.section("Attack Path Scoring")
-    targets = Scorer().rank(spns, asrep, delegations, cve_results, user_data)
+    targets = Scorer().rank(spns, asrep, delegations, cve_results, user_data,
+                            enc_audit=enc_audit, trusts=trusts)
     print_priority_targets(targets, top=args.top)
 
     # ── Summary ───────────────────────────────────────────────────
@@ -276,6 +299,14 @@ def run_scan(args):
         "asrep":       asrep,
         "delegations": delegations,
         "user_data":   user_data,
+        "enc_audit":   {
+            "rc4_only":  len(enc_audit.rc4_only_accounts) if enc_audit else 0,
+            "des":       len(enc_audit.des_accounts) if enc_audit else 0,
+            "weak_dcs":  len(enc_audit.weak_dcs) if enc_audit else 0,
+        },
+        "trusts":      [{"partner": t.trust_partner, "direction": t.direction,
+                         "risk": t.risk, "sid_filtering": t.sid_filtering}
+                        for t in trusts],
         "cves":        [r.to_dict() for r in cve_results],
         "targets":     targets,
     }
