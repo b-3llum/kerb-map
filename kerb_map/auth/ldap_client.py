@@ -141,6 +141,11 @@ class LDAPClient:
         return self.query(search_filter, attributes, search_base=config_base)
 
     def get_domain_info(self):
+        """
+        Fix: previously returned a raw ldap3 entry object, but reporter.py calls
+        info.get('domain', ...) etc. — ldap3 entries have no .get() method.
+        Now returns a plain dict with friendly keys matching reporter.py's expectations.
+        """
         entries = self.query(
             "(objectClass=domainDNS)",
             [
@@ -151,7 +156,45 @@ class LDAPClient:
                 "whenCreated",
             ]
         )
-        return entries[0] if entries else None
+        if not entries:
+            return {}
+        e = entries[0]
+
+        def _int(attr):
+            try:
+                v = e[attr].value
+                return int(v) if v is not None else None
+            except Exception:
+                return None
+
+        def _str(attr):
+            try:
+                v = e[attr].value
+                return str(v) if v is not None else None
+            except Exception:
+                return None
+
+        FL_MAP = {
+            0: "Windows 2000",
+            1: "Windows Server 2003 interim",
+            2: "Windows Server 2003",
+            3: "Windows Server 2008",
+            4: "Windows Server 2008 R2",
+            5: "Windows Server 2012",
+            6: "Windows Server 2012 R2",
+            7: "Windows Server 2016/2019/2022",
+        }
+        fl = _int("msDS-Behavior-Version") or 0
+
+        return {
+            "domain":                self.domain,
+            "functional_level":      FL_MAP.get(fl, str(fl)),
+            "machine_account_quota": _int("ms-DS-MachineAccountQuota"),
+            "min_pwd_length":        _int("minPwdLength"),
+            "pwd_history_length":    _int("pwdHistoryLength"),
+            "lockout_threshold":     _int("lockoutThreshold"),
+            "when_created":          _str("whenCreated"),
+        }
 
     def close(self):
         if self.conn:
