@@ -16,6 +16,8 @@ import time
 import argparse
 import json
 import datetime
+import subprocess
+import shutil
 from pathlib import Path
 
 # ── make sure the package is importable when running as a script ──
@@ -123,6 +125,11 @@ Examples:
     db.add_argument("--show-scan",   type=int, metavar="ID",
                     help="Display findings from a previous scan by ID")
 
+    # ── Maintenance ─────────────────────────────────────────────
+    maint = p.add_argument_group("Maintenance")
+    maint.add_argument("--update", action="store_true",
+                       help="Pull latest version from GitHub and reinstall")
+
     return p
 
 
@@ -160,6 +167,61 @@ def cmd_show_scan(scan_id: int):
             f"[cyan]{f['attack']:<40}[/cyan]  {f['target']}"
         )
     console.print()
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Self-update
+# ──────────────────────────────────────────────────────────────────────────────
+
+def cmd_update():
+    repo_root = Path(__file__).resolve().parent
+    git_dir   = repo_root / ".git"
+
+    if not git_dir.is_dir():
+        log.error("Not installed from a git clone — cannot auto-update.")
+        log.info("Re-clone from: https://github.com/b-3llum/kerb-map")
+        sys.exit(1)
+
+    log.section("Updating kerb-map")
+
+    # Pull latest
+    log.info("Running git pull...")
+    result = subprocess.run(
+        ["git", "pull"], cwd=repo_root, capture_output=True, text=True,
+    )
+    if result.returncode != 0:
+        log.error(f"git pull failed: {result.stderr.strip()}")
+        sys.exit(1)
+    console.print(f"  {result.stdout.strip()}")
+
+    if "Already up to date" in result.stdout:
+        log.success("Already on the latest version.")
+        return
+
+    # Reinstall if pipx is available
+    if shutil.which("pipx"):
+        log.info("Reinstalling via pipx...")
+        r = subprocess.run(
+            ["pipx", "install", "--force", str(repo_root)],
+            capture_output=True, text=True,
+        )
+        if r.returncode == 0:
+            log.success("Updated and reinstalled via pipx.")
+        else:
+            log.warn(f"pipx reinstall failed: {r.stderr.strip()}")
+            log.info("Run manually: pipx install --force " + str(repo_root))
+    elif shutil.which("pip"):
+        log.info("Reinstalling via pip...")
+        r = subprocess.run(
+            ["pip", "install", "--upgrade", str(repo_root)],
+            capture_output=True, text=True,
+        )
+        if r.returncode == 0:
+            log.success("Updated and reinstalled via pip.")
+        else:
+            log.warn(f"pip reinstall failed: {r.stderr.strip()}")
+    else:
+        log.success("Source updated. No pip/pipx found — running directly is fine.")
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -318,6 +380,11 @@ def run_scan(args):
 def main():
     parser = build_parser()
     args   = parser.parse_args()
+
+    # Maintenance operations
+    if args.update:
+        cmd_update()
+        return
 
     # DB-only operations
     if args.list_scans:
