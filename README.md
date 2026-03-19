@@ -33,7 +33,9 @@ A full user manual covering all modules, CVE detection methods, detection profil
     --asrep        AS-REP roastable accounts (no creds needed)
     --delegation   Unconstrained / Constrained / RBCD mapping
     --users        Privileged users, policy, DnsAdmins, LAPS
-    --cves         CVE detection (ZeroLogon, noPac, ESC1-8...)
+    --encryption   Weak Kerberos encryption audit (RC4/DES)
+    --trusts       Domain trust mapping & risk assessment
+    --cves         CVE detection (ZeroLogon, noPac, ESC1-8, Certifried...)
     --aggressive   Enable RPC probes (louder — Event 5145)
     -o json        Export results to JSON or BloodHound format
 
@@ -144,6 +146,8 @@ kerb-map --show-scan 3
 | `-k / --kerberos` | Use ccache ticket (set KRB5CCNAME first) |
 | `--all` | Run all modules (default if no module flag given) |
 | `--spn / --asrep / --delegation / --users / --cves` | Run specific modules only |
+| `--encryption` | Weak Kerberos encryption audit (RC4/DES on accounts and DCs) |
+| `--trusts` | Domain trust enumeration with SID filtering risk assessment |
 | `--aggressive` | Enable RPC CVE probes — generates Windows Event 5145 |
 | `--stealth` | Add random jitter between LDAP queries |
 | `-o json / bloodhound` | Write results to file |
@@ -158,12 +162,18 @@ kerb-map --show-scan 3
 
 | Module | Noise | Event IDs | MDI Detection |
 |---|---|---|---|
-| LDAP enumeration (all safe checks) | 🟢 LOW | 1644 (if diag logging on) | No |
-| Kerberoasting w/ AES tickets | 🟡 MEDIUM | 4769 per ticket | Possible |
-| Kerberoasting w/ RC4 tickets | 🔴 HIGH | 4769 (enc type 0x17) | Yes |
-| ZeroLogon RPC probe | 🔴 HIGH | 5827 / 5828 | Yes |
-| PrintNightmare pipe probe | 🔴 HIGH | 5145 | Yes |
-| PetitPotam EFS probe | 🔴 HIGH | 5145 | Yes |
+| LDAP enumeration (all safe checks) | LOW | 1644 (if diag logging on) | No |
+| Encryption audit | LOW | 1644 | No |
+| Trust mapping | LOW | 1644 | No |
+| GPP Passwords (MS14-025) | LOW | 1644 | No |
+| Bronze Bit (CVE-2020-17049) | LOW | 1644 | No |
+| Certifried (CVE-2022-26923) | LOW | 1644 | No |
+| LDAP Signing check | LOW | 1644 | No |
+| Kerberoasting w/ AES tickets | MEDIUM | 4769 per ticket | Possible |
+| Kerberoasting w/ RC4 tickets | HIGH | 4769 (enc type 0x17) | Yes |
+| ZeroLogon RPC probe | HIGH | 5827 / 5828 | Yes |
+| PrintNightmare pipe probe | HIGH | 5145 | Yes |
+| PetitPotam EFS probe | HIGH | 5145 | Yes |
 
 > **Note:** The `--aggressive` flag enables all HIGH-noise RPC probes. Only use it when your engagement scope explicitly permits noisy testing.
 
