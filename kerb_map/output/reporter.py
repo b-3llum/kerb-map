@@ -44,11 +44,11 @@ def print_banner():
  | . \  __/ |  | |_) | | |  | | (_| | |_) |
  |_|\_\___|_|  |_.__/  |_|  |_|\__,_| .__/
                                      | |
-  Kerberos Attack Surface Mapper     |_|  v1.0
+  Kerberos Attack Surface Mapper     |_|  v1.1
 """
     console.print(f"[bold cyan]{banner}[/bold cyan]")
     console.print(
-        "  [dim]AD enumeration · Kerberoast scoring · CVE detection · Priority ranking[/dim]\n"
+        "  [dim]AD enumeration · Kerberoast scoring · CVE detection · Hygiene audit · Priority ranking[/dim]\n"
     )
 
 
@@ -430,3 +430,147 @@ def print_summary(targets: List[Dict], cve_results: list):
             f"[cyan]{top['attack']}[/cyan] against [white]{top['target']}[/white]\n"
             f"  [green]{top.get('next_step', '').split(chr(10))[0]}[/green]\n"
         )
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Hygiene Audit Results
+# ──────────────────────────────────────────────────────────────────────────────
+
+def print_hygiene_results(hygiene):
+    console.rule("[bold cyan]Defensive Hygiene Audit[/bold cyan]")
+
+    if not hygiene:
+        console.print("  [dim]Hygiene audit skipped.[/dim]\n")
+        return
+
+    # ── krbtgt Password Age ──
+    krb = hygiene.krbtgt_age
+    if krb:
+        risk_col = {"CRITICAL": "red", "HIGH": "red", "MEDIUM": "yellow", "LOW": "green"}.get(krb.get("risk"), "white")
+        console.print(f"  [{risk_col}]krbtgt:[/{risk_col}] {krb.get('detail', 'N/A')}")
+        if krb.get("risk") in ("CRITICAL", "HIGH"):
+            console.print("    [green]Remediation: Reset krbtgt password TWICE (with replication interval between resets)[/green]")
+        console.print()
+
+    # ── LAPS Coverage ──
+    laps = hygiene.laps_coverage
+    if laps:
+        risk_col = {"CRITICAL": "red", "HIGH": "red", "MEDIUM": "yellow", "LOW": "green"}.get(laps.get("risk"), "white")
+        console.print(f"  [{risk_col}]LAPS Coverage:[/{risk_col}] {laps.get('detail', 'N/A')}")
+        if laps.get("risk") in ("CRITICAL", "HIGH"):
+            console.print("    [green]Remediation: Deploy LAPS via GPO to all workstations and member servers[/green]")
+        console.print()
+
+    # ── FGPP ──
+    fgpp = hygiene.fgpp_audit
+    if fgpp:
+        risk_col = {"CRITICAL": "red", "HIGH": "red", "MEDIUM": "yellow", "LOW": "green"}.get(fgpp.get("risk"), "white")
+        console.print(f"  [{risk_col}]Fine-Grained Password Policies:[/{risk_col}] {fgpp.get('detail', 'N/A')}")
+        if fgpp.get("policies"):
+            for p in fgpp["policies"]:
+                console.print(
+                    f"    [cyan]•[/cyan] {p['name']}  min_length={p['min_length']}  "
+                    f"complexity={p['complexity_enabled']}  lockout={p['lockout_threshold']}  "
+                    f"applies_to={len(p['applies_to'])} object(s)"
+                )
+        if not fgpp.get("privileged_covered"):
+            console.print("    [green]Remediation: Create a strict FGPP (15+ chars, lockout) targeting Domain Admins and Enterprise Admins[/green]")
+        console.print()
+
+    # ── SID History ──
+    sid = hygiene.sid_history
+    if sid:
+        console.print(f"  [bold red]SID History Findings ({len(sid)}):[/bold red]")
+        for s in sid[:10]:
+            risk_col = "red" if s["risk"] == "CRITICAL" else "yellow"
+            console.print(f"    [{risk_col}]![/{risk_col}] {s['account']}  {s['detail']}")
+        if len(sid) > 10:
+            console.print(f"    [dim]... and {len(sid) - 10} more[/dim]")
+        console.print("    [green]Remediation: Clear SID History on migrated accounts; investigate same-domain SIDs for backdoors[/green]")
+        console.print()
+
+    # ── AdminSDHolder Orphans ──
+    orphans = hygiene.adminsdholder_orphans
+    if orphans:
+        console.print(f"  [bold yellow]AdminSDHolder Orphans ({len(orphans)}):[/bold yellow]")
+        for o in orphans[:10]:
+            console.print(f"    [yellow]![/yellow] {o['account']}  — {o['detail']}")
+        if len(orphans) > 10:
+            console.print(f"    [dim]... and {len(orphans) - 10} more[/dim]")
+        console.print("    [green]Remediation: Clear adminCount flag on accounts no longer in protected groups[/green]")
+        console.print()
+
+    # ── Credential Exposure ──
+    creds = hygiene.credential_exposure
+    if creds:
+        console.print(f"  [bold red]Credentials in AD Attributes ({len(creds)}):[/bold red]")
+        for c in creds[:10]:
+            risk_col = "red" if c["risk"] == "CRITICAL" else "yellow"
+            console.print(f"    [{risk_col}]![/{risk_col}] {c['account']}  ({c['field']} field)  {c['detail']}")
+        if len(creds) > 10:
+            console.print(f"    [dim]... and {len(creds) - 10} more[/dim]")
+        console.print("    [green]Remediation: Remove credentials from AD description/info attributes immediately[/green]")
+        console.print()
+
+    # ── PrimaryGroupId ──
+    pgid = hygiene.primary_group_abuse
+    if pgid:
+        console.print(f"  [bold yellow]Non-Default PrimaryGroupId ({len(pgid)}):[/bold yellow]")
+        for p in pgid[:10]:
+            risk_col = "red" if p["risk"] == "HIGH" else "yellow"
+            console.print(f"    [{risk_col}]![/{risk_col}] {p['account']}  {p['detail']}")
+        if len(pgid) > 10:
+            console.print(f"    [dim]... and {len(pgid) - 10} more[/dim]")
+        console.print("    [green]Remediation: Reset primaryGroupId to 513 (Domain Users) unless explicitly required[/green]")
+        console.print()
+
+    # ── Stale Computers ──
+    stale = hygiene.stale_computers
+    if stale:
+        console.print(f"  [bold yellow]Stale Computer Accounts ({len(stale)}):[/bold yellow]")
+        for s in stale[:10]:
+            console.print(f"    [yellow]•[/yellow] {s['account']}  ({s['os']})  inactive {s['last_logon_days']}d")
+        if len(stale) > 10:
+            console.print(f"    [dim]... and {len(stale) - 10} more[/dim]")
+        console.print("    [green]Remediation: Disable and move stale computer accounts to a quarantine OU[/green]")
+        console.print()
+
+    # ── Privileged Group Breakdown ──
+    groups = hygiene.privileged_groups
+    if groups:
+        console.print(f"  [bold cyan]Privileged Group Membership Breakdown:[/bold cyan]")
+        table = Table(box=box.SIMPLE_HEAD, header_style="bold cyan")
+        table.add_column("Group", width=30)
+        table.add_column("Members", width=8, justify="center")
+        table.add_column("Nested Groups", width=14, justify="center")
+        table.add_column("Direct Users", width=30)
+
+        for group_name, members in sorted(groups.items()):
+            nested = sum(1 for m in members if m["is_nested_group"])
+            direct = [m["account"] for m in members if not m["is_nested_group"]]
+            direct_str = ", ".join(direct[:5])
+            if len(direct) > 5:
+                direct_str += f" +{len(direct) - 5}"
+            table.add_row(group_name, str(len(members)), str(nested), direct_str)
+
+        console.print(table)
+        console.print()
+
+    # ── Service Account Hygiene ──
+    svc = hygiene.service_acct_hygiene
+    if svc:
+        console.print(f"  [bold yellow]Service Account Password Issues ({len(svc)}):[/bold yellow]")
+        for s in svc[:10]:
+            risk_col = {"CRITICAL": "red", "HIGH": "red", "MEDIUM": "yellow", "LOW": "green"}.get(s["risk"], "white")
+            console.print(f"    [{risk_col}]![/{risk_col}] {s['account']}  {s['detail']}")
+        if len(svc) > 10:
+            console.print(f"    [dim]... and {len(svc) - 10} more[/dim]")
+        console.print("    [green]Remediation: Rotate service account passwords; consider gMSA for automated rotation[/green]")
+        console.print()
+
+    # ── Hygiene Score ──
+    total = hygiene.finding_count()
+    if total == 0:
+        console.print("  [bold green]All hygiene checks passed — no findings.[/bold green]\n")
+    else:
+        console.print(f"  [bold]Total hygiene findings requiring attention: {total}[/bold]\n")

@@ -4,7 +4,7 @@
 
 **Active Directory Kerberos Attack Surface Mapper**
 
-![version](https://img.shields.io/badge/version-1.0.0-blue)
+![version](https://img.shields.io/badge/version-1.1.0-blue)
 ![python](https://img.shields.io/badge/python-3.10+-blue)
 ![platform](https://img.shields.io/badge/platform-Linux-lightgrey)
 ![license](https://img.shields.io/badge/license-MIT-lightgrey)
@@ -35,6 +35,8 @@ A full user manual covering all modules, CVE detection methods, detection profil
     --encryption   Weak Kerberos encryption audit (RC4/DES)
     --trusts       Domain trust mapping & risk assessment
     --cves         CVE detection (ZeroLogon, noPac, ESC1-8, Certifried...)
+    --hygiene      Defensive posture audit (krbtgt age, LAPS coverage,
+                   SID History, FGPP, credential exposure, stale machines...)
     --aggressive   Enable RPC probes (louder — Event 5145)
     -o json        Export results to JSON or BloodHound format
 
@@ -147,13 +149,17 @@ kerb-map --show-scan 3
 | `--spn / --asrep / --delegation / --users / --cves` | Run specific modules only |
 | `--encryption` | Weak Kerberos encryption audit (RC4/DES on accounts and DCs) |
 | `--trusts` | Domain trust enumeration with SID filtering risk assessment |
+| `--hygiene` | Defensive hygiene audit (LAPS, krbtgt, SID History, FGPP, stale accounts) |
 | `--aggressive` | Enable RPC CVE probes — generates Windows Event 5145 |
 | `--stealth` | Add random jitter between LDAP queries |
 | `-o json / bloodhound` | Write results to file |
 | `--top N` | Show top N priority targets (default 15) |
 | `--no-cache` | Do not save to local SQLite database |
+| `--timeout N` | LDAP connection timeout in seconds (default: 10) |
+| `--outfile NAME` | Custom output filename |
 | `--list-scans` | List all cached scans |
 | `--show-scan ID` | Replay findings from a stored scan |
+| `--update` | Pull latest version from GitHub and reinstall |
 
 ---
 
@@ -164,6 +170,7 @@ kerb-map --show-scan 3
 | LDAP enumeration (all safe checks) | LOW | 1644 (if diag logging on) | No |
 | Encryption audit | LOW | 1644 | No |
 | Trust mapping | LOW | 1644 | No |
+| Hygiene audit | LOW | 1644 | No |
 | GPP Passwords (MS14-025) | LOW | 1644 | No |
 | Bronze Bit (CVE-2020-17049) | LOW | 1644 | No |
 | Certifried (CVE-2022-26923) | LOW | 1644 | No |

@@ -120,8 +120,75 @@ class BloodHoundExporter:
                 "Aces": [],
             })
 
-        bh["data"]         = nodes
-        bh["meta"]["count"]= len(nodes)
+        # Hygiene findings — credential exposure
+        hygiene = data.get("hygiene", {})
+        for c in hygiene.get("credential_exposure", []):
+            nodes.append({
+                "ObjectIdentifier": f"{domain}\\{c['account']}",
+                "ObjectType": "User",
+                "Properties": {
+                    "name":               f"{c['account'].upper()}@{domain}",
+                    "credentialexposed":   True,
+                    "exposurefield":       c.get("field", ""),
+                    "admincount":          c.get("is_admin", False),
+                },
+                "Aces": [],
+            })
+
+        # Hygiene findings — SID History abuse
+        for s in hygiene.get("sid_history", []):
+            obj_type = "Computer" if s.get("is_computer") else "User"
+            nodes.append({
+                "ObjectIdentifier": f"{domain}\\{s['account']}",
+                "ObjectType": obj_type,
+                "Properties": {
+                    "name":            f"{s['account'].upper()}@{domain}",
+                    "sidhistory":      [s.get("sid_history_entry", "")],
+                    "sidhistoryrisk":  s.get("risk", "MEDIUM"),
+                },
+                "Aces": [],
+            })
+
+        # Hygiene findings — service account hygiene issues
+        for svc in hygiene.get("service_acct_hygiene", []):
+            nodes.append({
+                "ObjectIdentifier": f"{domain}\\{svc['account']}",
+                "ObjectType": "User",
+                "Properties": {
+                    "name":              f"{svc['account'].upper()}@{domain}",
+                    "hasspn":            True,
+                    "passwordagedays":   svc.get("password_age_days"),
+                    "pwdneverexpires":   svc.get("password_never_expires", False),
+                    "hygienerisk":       svc.get("risk", "LOW"),
+                },
+                "Aces": [],
+            })
+
+        # Trust relationships
+        for t in data.get("trusts", []):
+            nodes.append({
+                "ObjectIdentifier": f"{t.get('partner', t.get('trusted_domain', 'UNKNOWN')).upper()}",
+                "ObjectType": "Domain",
+                "Properties": {
+                    "name":          t.get("partner", t.get("trusted_domain", "UNKNOWN")).upper(),
+                    "trustdirection": t.get("direction", "Unknown"),
+                    "sidfiltering":  t.get("sid_filtering", True),
+                    "trustrisk":     t.get("risk", "MEDIUM"),
+                },
+                "Aces": [],
+            })
+
+        # Deduplicate nodes by ObjectIdentifier (keep first occurrence)
+        seen = set()
+        unique_nodes = []
+        for node in nodes:
+            oid = node["ObjectIdentifier"]
+            if oid not in seen:
+                seen.add(oid)
+                unique_nodes.append(node)
+
+        bh["data"]         = unique_nodes
+        bh["meta"]["count"]= len(unique_nodes)
 
         out = Path(path)
         with out.open("w") as f:

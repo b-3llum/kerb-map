@@ -31,12 +31,13 @@ from kerb_map.modules.user_enumerator   import UserEnumerator
 from kerb_map.modules.enc_auditor       import EncAuditor
 from kerb_map.modules.trust_mapper      import TrustMapper
 from kerb_map.modules.cve_scanner       import CVEScanner
+from kerb_map.modules.hygiene_auditor   import HygieneAuditor
 from kerb_map.modules.scorer            import Scorer
 from kerb_map.output.reporter           import (
     print_banner, print_domain_info, print_priority_targets,
     print_spn_results, print_asrep_results, print_delegation_results,
     print_cve_results, print_user_results, print_summary,
-    print_enc_audit_results, print_trust_results,
+    print_enc_audit_results, print_trust_results, print_hygiene_results,
 )
 from kerb_map.output.exporter           import JSONExporter, BloodHoundExporter
 from kerb_map.db.cache                  import Cache
@@ -101,6 +102,8 @@ Examples:
     mods.add_argument("--cves",        action="store_true", help="CVE / misconfiguration checks")
     mods.add_argument("--encryption", action="store_true", help="Weak encryption audit (RC4/DES)")
     mods.add_argument("--trusts",     action="store_true", help="Domain trust mapping")
+    mods.add_argument("--hygiene",   action="store_true",
+                      help="Defensive hygiene audit (LAPS coverage, krbtgt age, SID history, FGPP, stale machines, etc.)")
     mods.add_argument("--aggressive",  action="store_true",
                       help="Enable RPC-based CVE probes (louder — generates Event 5145)")
 
@@ -246,16 +249,17 @@ def run_scan(args):
     # ── Determine which modules to run ───────────────────────────
     run_all = args.all or not any([
         args.spn, args.asrep, args.delegation, args.users, args.cves,
-        args.encryption, args.trusts,
+        args.encryption, args.trusts, args.hygiene,
     ])
 
-    run_spn  = run_all or args.spn
-    run_asrep= run_all or args.asrep
-    run_deleg= run_all or args.delegation
-    run_user = run_all or args.users
-    run_cve  = run_all or args.cves
-    run_enc  = run_all or args.encryption
-    run_trust= run_all or args.trusts
+    run_spn    = run_all or args.spn
+    run_asrep  = run_all or args.asrep
+    run_deleg  = run_all or args.delegation
+    run_user   = run_all or args.users
+    run_cve    = run_all or args.cves
+    run_enc    = run_all or args.encryption
+    run_trust  = run_all or args.trusts
+    run_hygiene= run_all or args.hygiene
 
     # ── Connect ───────────────────────────────────────────────────
     print_banner()
@@ -336,10 +340,17 @@ def run_scan(args):
         )
         print_cve_results(cve_results)
 
+    # ── Hygiene Audit ────────────────────────────────────────────
+    hygiene = None
+    if run_hygiene:
+        log.section("Defensive Hygiene Audit")
+        hygiene = HygieneAuditor(ldap).audit()
+        print_hygiene_results(hygiene)
+
     # ── Score & Rank ──────────────────────────────────────────────
     log.section("Attack Path Scoring")
     targets = Scorer().rank(spns, asrep, delegations, cve_results, user_data,
-                            enc_audit=enc_audit, trusts=trusts)
+                            enc_audit=enc_audit, trusts=trusts, hygiene=hygiene)
     print_priority_targets(targets, top=args.top)
 
     # ── Summary ───────────────────────────────────────────────────
@@ -370,6 +381,18 @@ def run_scan(args):
                          "risk": t.risk, "sid_filtering": t.sid_filtering}
                         for t in trusts],
         "cves":        [r.to_dict() for r in cve_results],
+        "hygiene": {
+            "sid_history":          hygiene.sid_history if hygiene else [],
+            "laps_coverage":        hygiene.laps_coverage if hygiene else {},
+            "krbtgt_age":           hygiene.krbtgt_age if hygiene else {},
+            "adminsdholder_orphans":hygiene.adminsdholder_orphans if hygiene else [],
+            "fgpp_audit":           hygiene.fgpp_audit if hygiene else {},
+            "credential_exposure":  hygiene.credential_exposure if hygiene else [],
+            "primary_group_abuse":  hygiene.primary_group_abuse if hygiene else [],
+            "stale_computers":      len(hygiene.stale_computers) if hygiene else 0,
+            "privileged_groups":    {k: len(v) for k, v in hygiene.privileged_groups.items()} if hygiene else {},
+            "service_acct_hygiene": hygiene.service_acct_hygiene if hygiene else [],
+        },
         "targets":     targets,
     }
 

@@ -7,7 +7,7 @@ from typing import List, Dict, Any
 
 class Scorer:
     def rank(self, spns, asrep, delegations, cve_results, user_data,
-             enc_audit=None, trusts=None) -> List[Dict]:
+             enc_audit=None, trusts=None, hygiene=None) -> List[Dict]:
         targets = []
 
         for spn in spns:
@@ -126,6 +126,70 @@ class Scorer:
                         "reason": t.note,
                         "next_step": f"# Pivot via trust to {t.trust_partner}",
                         "category": "trust",
+                    })
+
+        # Hygiene findings (defensive — flagged as attack surface items)
+        if hygiene:
+            for s in hygiene.sid_history:
+                if s["risk"] == "CRITICAL":
+                    targets.append({
+                        "target": s["account"], "attack": "SID History Abuse",
+                        "priority": 85, "severity": "CRITICAL",
+                        "reason": s["detail"],
+                        "next_step": "# Investigate same-domain SID History — possible persistence backdoor",
+                        "category": "hygiene",
+                    })
+
+            krb = hygiene.krbtgt_age
+            if krb.get("risk") in ("CRITICAL", "HIGH"):
+                targets.append({
+                    "target": "krbtgt", "attack": "Golden Ticket (stale krbtgt)",
+                    "priority": 92 if krb["risk"] == "CRITICAL" else 78,
+                    "severity": krb["risk"],
+                    "reason": krb["detail"],
+                    "next_step": "ticketer.py -nthash <KRBTGT_HASH> -domain-sid <SID> -domain <DOMAIN> Administrator",
+                    "category": "hygiene",
+                })
+
+            for c in hygiene.credential_exposure:
+                targets.append({
+                    "target": c["account"], "attack": "Credential in AD Attribute",
+                    "priority": 90 if c["is_admin"] else 72,
+                    "severity": c["risk"],
+                    "reason": c["detail"],
+                    "next_step": f"# Read {c['field']} field: ldapsearch -x -b '<BASE>' '(sAMAccountName={c['account']})' {c['field']}",
+                    "category": "hygiene",
+                })
+
+            for p in hygiene.primary_group_abuse:
+                if p["risk"] == "HIGH":
+                    targets.append({
+                        "target": p["account"], "attack": "Hidden Group Membership (PrimaryGroupId)",
+                        "priority": 68, "severity": "HIGH",
+                        "reason": p["detail"],
+                        "next_step": "# Account has hidden membership via primaryGroupId — enumerate actual privileges",
+                        "category": "hygiene",
+                    })
+
+            laps = hygiene.laps_coverage
+            if laps.get("risk") == "CRITICAL":
+                targets.append({
+                    "target": "All Workstations", "attack": "No LAPS — Shared Local Admin",
+                    "priority": 82, "severity": "CRITICAL",
+                    "reason": laps["detail"],
+                    "next_step": "nxc smb <SUBNET> -u <USER> -p <PASS> --local-auth",
+                    "category": "hygiene",
+                })
+
+            for s in hygiene.service_acct_hygiene:
+                if s["risk"] in ("CRITICAL", "HIGH"):
+                    targets.append({
+                        "target": s["account"], "attack": "Weak Service Account Hygiene",
+                        "priority": 65 if s["risk"] == "HIGH" else 80,
+                        "severity": s["risk"],
+                        "reason": s["detail"],
+                        "next_step": f"# Service account with SPN — Kerberoast + credential reuse",
+                        "category": "hygiene",
                     })
 
         targets.sort(key=lambda x: x["priority"], reverse=True)
