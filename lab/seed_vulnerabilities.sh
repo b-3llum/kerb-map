@@ -156,6 +156,14 @@ st user create svc_old_admin "$SEED_PASS" || true
 # samba-tool dsacl set adds an ACE to the target object's nTSecurityDescriptor.
 # (S = trustee SID, A = allow, CR = control access right, GUID = right OID)
 st user setpassword svc_old_admin --newpassword="$SEED_PASS" || true
+
+# Small wait for the just-created user to be visible via ldapsearch.
+# Field bug: without this, the SID lookup right after user create
+# sometimes returns empty (Samba commit cycle race), the python
+# decoder silently outputs nothing, and the dsacl grant gets skipped
+# — leaving svc_old_admin without the DCSync ACE that's the whole
+# point of the seed.
+sleep 1
 SVC_OLD_SID=$(ldap -LLL -b "${DOMAIN_BASE_DN}" \
     "(sAMAccountName=svc_old_admin)" objectSid 2>/dev/null \
     | sed -n 's/^objectSid:: //p' \
@@ -219,9 +227,22 @@ operatingSystem: Windows 10 Enterprise" \
 # write-ACL audit should flag this as CRITICAL.
 st user create bob_da "$SEED_PASS" || true
 st group addmembers 'Domain Admins' bob_da || true
+# Explicitly pin adminCount=1 — Samba's AdminSDHolder runs every 60min,
+# so a freshly-added DA member won't have adminCount set during the
+# first scan. Without this, the Shadow Credentials module (which only
+# audits adminCount=1 accounts) would miss bob_da, and the
+# helpdesk_op → bob_da KCL writer ACE — the whole point of this seed
+# — would be invisible to kerb-map.
+ldbmod "dn: CN=bob_da,CN=Users,${DOMAIN_BASE_DN}
+changetype: modify
+replace: adminCount
+adminCount: 1" || true
 st user create helpdesk_op "$SEED_PASS" \
     --description='Non-default writer on bob_da KeyCredentialLink' || true
 
+# Wait for helpdesk_op to be visible — same Samba commit-race fix
+# as above.
+sleep 1
 HELPDESK_SID=$(ldap -LLL -b "${DOMAIN_BASE_DN}" \
     "(sAMAccountName=helpdesk_op)" objectSid 2>/dev/null \
     | sed -n 's/^objectSid:: //p' \
@@ -264,6 +285,9 @@ st group addmembers 'Pre-Windows 2000 Compatible Access' \
 # (which is the correct behaviour).
 st user create appsupport "$SEED_PASS" \
     --description='Non-default gMSA password reader' || true
+
+# Wait for appsupport to be visible — same Samba commit-race fix.
+sleep 1
 
 # Create the gMSA via raw LDIF — samba-tool doesn't expose gMSA creation
 # as a first-class command. We use the minimal shape the GmsaKdsAudit

@@ -12,7 +12,17 @@ import random
 import ssl
 import time
 
-from ldap3 import ALL, KERBEROS, NTLM, SASL, SUBTREE, Connection, Server, Tls
+from ldap3 import (
+    ALL,
+    KERBEROS,
+    NTLM,
+    SASL,
+    SIMPLE,
+    SUBTREE,
+    Connection,
+    Server,
+    Tls,
+)
 from ldap3.core.exceptions import LDAPBindError, LDAPException, LDAPSocketOpenError
 from rich.console import Console
 
@@ -24,12 +34,27 @@ log = Logger()
 
 
 # Transport modes, in default fallback order.
-TRANSPORT_LDAPS    = "ldaps"     # LDAPS on 636 (TLS from the start)
-TRANSPORT_STARTTLS = "starttls"  # plain 389 → StartTLS upgrade → bind
-TRANSPORT_SIGNED   = "signed"    # SASL/GSS-API (Kerberos only) — channel signed
-TRANSPORT_PLAIN    = "plain"     # plain 389, simple/NTLM bind — last resort
+TRANSPORT_LDAPS         = "ldaps"          # LDAPS on 636, NTLM bind
+TRANSPORT_STARTTLS      = "starttls"       # plain 389 → StartTLS upgrade → NTLM bind
+TRANSPORT_SIGNED        = "signed"         # SASL/GSS-API (Kerberos only) — channel signed
+TRANSPORT_LDAPS_SIMPLE  = "ldaps-simple"   # LDAPS on 636, SIMPLE bind (Samba-AD-DC compat)
+TRANSPORT_PLAIN         = "plain"          # plain 389, NTLM bind — last resort
 
-_DEFAULT_CHAIN = (TRANSPORT_LDAPS, TRANSPORT_STARTTLS, TRANSPORT_SIGNED, TRANSPORT_PLAIN)
+# Default fallback order. NTLM-flavoured transports come first because
+# they're the Windows-AD happy path; SIMPLE-bind-over-LDAPS is the
+# Samba-AD-DC path (and any Windows DC where NTLM was disabled).
+# Field bug from a vagrant-up validation: kerb-map used to fail with
+# "session terminated by server" against a default-config Samba-4 DC
+# because every transport in the chain used NTLM, which Samba's LDAP
+# service doesn't accept. SIMPLE bind over LDAPS is the right path
+# there — the credential still flies in TLS.
+_DEFAULT_CHAIN = (
+    TRANSPORT_LDAPS,
+    TRANSPORT_STARTTLS,
+    TRANSPORT_SIGNED,
+    TRANSPORT_LDAPS_SIMPLE,
+    TRANSPORT_PLAIN,
+)
 
 
 class LDAPAuthError(Exception):
@@ -110,6 +135,8 @@ class LDAPClient:
             port, use_ssl, do_starttls = 636, True, False
         elif transport == TRANSPORT_STARTTLS:
             port, use_ssl, do_starttls = 389, False, True
+        elif transport == TRANSPORT_LDAPS_SIMPLE:
+            port, use_ssl, do_starttls = 636, True, False
         elif transport in (TRANSPORT_SIGNED, TRANSPORT_PLAIN):
             port, use_ssl, do_starttls = 389, False, False
         else:
@@ -127,6 +154,22 @@ class LDAPClient:
 
         if use_kerberos:
             auth_kwargs = dict(authentication=SASL, sasl_mechanism=KERBEROS)
+        elif transport == TRANSPORT_LDAPS_SIMPLE:
+            # SIMPLE bind needs user@REALM form. The credential is sent
+            # in cleartext at the LDAP layer but TLS encrypts the
+            # transport — same security posture as Windows LDAP-over-
+            # TLS. Hash auth (PtH) doesn't work with SIMPLE bind by
+            # design; SIMPLE is only attempted when a password is set.
+            if not password or hashes:
+                raise LDAPBindError(
+                    "SIMPLE bind requires a plaintext password "
+                    "(PtH not supported for this transport)"
+                )
+            auth_kwargs = dict(
+                user=f"{username}@{self.domain.upper()}",
+                password=password,
+                authentication=SIMPLE,
+            )
         elif hashes:
             lm, nt = self._split_hash(hashes)
             auth_kwargs = dict(
@@ -164,6 +207,12 @@ class LDAPClient:
         elif transport == TRANSPORT_SIGNED:
             console.print(
                 f"[green][+] Signed LDAP bind (SASL/Kerberos) successful[/green]  {ident}"
+            )
+        elif transport == TRANSPORT_LDAPS_SIMPLE:
+            tls_desc = self._describe_tls(conn)
+            console.print(
+                f"[green][+] LDAPS SIMPLE bind successful — {tls_desc}[/green]  "
+                f"{self.username}@{self.domain.upper()}"
             )
         else:  # plain
             console.print(

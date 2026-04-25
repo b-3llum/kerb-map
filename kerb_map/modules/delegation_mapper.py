@@ -49,8 +49,8 @@ class DelegationMapper:
         results = []
         for e in entries:
             account  = str(e["sAMAccountName"])
-            dns_name = str(e["dNSHostName"].value or "") if e.get("dNSHostName") else ""
-            os_val   = str(e["operatingSystem"].value or "unknown") if e.get("operatingSystem") else "unknown"
+            dns_name = str(e["dNSHostName"].value or "") if "dNSHostName" in e else ""
+            os_val   = str(e["operatingSystem"].value or "unknown") if "operatingSystem" in e else "unknown"
             results.append({
                 "account":   account,
                 "type":      "Computer" if account.endswith("$") else "User",
@@ -105,7 +105,7 @@ class DelegationMapper:
         results = []
         for e in entries:
             target   = str(e["sAMAccountName"])  # Fix: scorer uses d["target"], reporter uses d["target"]
-            dns_name = str(e["dNSHostName"].value or "") if e.get("dNSHostName") else ""
+            dns_name = str(e["dNSHostName"].value or "") if "dNSHostName" in e else ""
             results.append({
                 "target":    target,             # Fix: was "target_account" in old dataclass
                 "dns_name":  dns_name,
