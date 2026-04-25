@@ -1,0 +1,76 @@
+# lab/Vagrantfile — deterministic Samba-4 AD lab for kerb-map validation.
+#
+# One Ubuntu 22.04 box running samba-ad-dc, provisioned by:
+#   1. provision_dc.sh        — base AD: domain provision, DNS, krb5.conf
+#   2. seed_vulnerabilities.sh — every v1 + v2 attack-surface seed
+#
+# Bring it up:
+#   cd lab && vagrant up
+# Tear it down:
+#   vagrant destroy -f
+# Re-seed without rebuilding the VM:
+#   vagrant ssh -c 'sudo /vagrant/seed_vulnerabilities.sh'
+#
+# Default credentials (deterministic — nothing to memorise):
+#   Domain      : LAB.LOCAL
+#   Realm       : LAB.LOCAL
+#   NetBIOS     : LAB
+#   Admin       : LAB\Administrator
+#   Admin pass  : LabAdmin1!
+#   DC IP       : 192.168.56.10
+#   DC name     : DC01.lab.local
+#
+# Why Samba-4 not Windows Server: free, scriptable, repeatable, runs on a
+# 2 vCPU / 2 GB box, and covers ~85% of the AD attack surface kerb-map
+# enumerates. The 15% gap is mostly Server-2025-specific (BadSuccessor
+# dMSA needs FL=10 which Samba doesn't yet support — that path stays
+# integration-tested via the unit suite + a follow-up Server 2025 lab).
+#
+# Box choice: ubuntu/jammy64 because:
+#   * libvirt + virtualbox provider both work
+#   * samba-ad-dc package is stable on 22.04 LTS
+#   * smaller image than the equivalent Server-Core ISO
+
+Vagrant.configure("2") do |config|
+  config.vm.box           = "ubuntu/jammy64"
+  config.vm.box_check_update = false
+
+  # Single VM for now. If we add a member-server "victim host" for
+  # coercion / RBCD testing later, it'd be a second config.vm.define.
+  config.vm.define "dc01" do |dc|
+    dc.vm.hostname = "dc01"
+    dc.vm.network "private_network", ip: "192.168.56.10"
+
+    dc.vm.provider "virtualbox" do |vb|
+      vb.name   = "kerbmap-dc01"
+      vb.memory = "2048"
+      vb.cpus   = 2
+      # Disable USB controllers so the guest doesn't whine on hosts
+      # without Extension Pack installed.
+      vb.customize ["modifyvm", :id, "--usb",   "off"]
+      vb.customize ["modifyvm", :id, "--usbehci", "off"]
+    end
+
+    dc.vm.provider "libvirt" do |lv|
+      lv.memory = 2048
+      lv.cpus   = 2
+    end
+
+    # Pin the seed scripts as a synced folder so a re-seed doesn't need
+    # `vagrant rsync` — the operator can edit and re-run on the host.
+    dc.vm.synced_folder ".", "/vagrant", type: "rsync",
+                        rsync__exclude: [".git/", "*.log", "*.box"]
+
+    dc.vm.provision "shell",
+                    path: "provision_dc.sh",
+                    privileged: true
+
+    dc.vm.provision "shell",
+                    path: "seed_vulnerabilities.sh",
+                    privileged: true,
+                    run: "always"   # re-seed on every `vagrant up` /
+                                    # `vagrant provision` so changes to
+                                    # the seed list take effect without
+                                    # a full rebuild
+  end
+end
