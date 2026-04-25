@@ -14,6 +14,8 @@ from .cve_base import (
 
 
 class NoPac(CVEBase):
+    CVE_ID = "CVE-2021-42278/42287"
+    NAME   = "noPac — sAMAccountName Spoofing"
     """CVE-2021-42278/42287 — noPac / sAMAccountName Spoofing.
 
     Brief §2.1: removed the DFL-based ``_infer_patch_status`` heuristic

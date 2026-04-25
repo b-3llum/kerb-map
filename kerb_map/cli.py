@@ -140,6 +140,13 @@ Examples:
                       help="Run the v2 plugin-contract modules (DCSync rights, "
                            "Shadow Credentials, BadSuccessor — auto-discovered via "
                            "@register). Additive to the legacy modules above.")
+    mods.add_argument("--list-cves", dest="list_cves", action="store_true",
+                      help="Print every available CVE check (with CVE-ID + "
+                           "aggressive flag) and exit. No live scan.")
+    mods.add_argument("--only-cves", dest="only_cves", metavar="IDS",
+                      help="Run only the named CVE checks (comma-separated CVE-IDs "
+                           "from --list-cves). Combine with --aggressive when naming "
+                           "an aggressive check (otherwise it's filtered out).")
 
     # ── Output ────────────────────────────────────────────────────
     out = p.add_argument_group("Output")
@@ -269,6 +276,32 @@ def cmd_diff(a_id: int, b_id: int):
     _print_bucket("REMOVED — customer fixed these",      "green",  result.removed)
     _print_bucket("ADDED — new findings since last scan", "red",    result.added)
     _print_bucket("UNCHANGED — still exposed",            "yellow", result.unchanged)
+
+
+def cmd_list_cves():
+    """Print every CVE check kerb-map ships with — for use with
+    --only-cves. No live scan."""
+    from kerb_map.modules.cve_scanner import CVEScanner
+
+    checks = CVEScanner.list_checks()
+    console.print("\n[bold cyan]Available CVE checks[/bold cyan]")
+    console.print("[dim](use the CVE-ID column with --only-cves "
+                  "<id>,<id>,...)[/dim]\n")
+    safe = [c for c in checks if not c["requires_aggressive"]]
+    loud = [c for c in checks if c["requires_aggressive"]]
+
+    def _print(rows, label):
+        if not rows:
+            return
+        console.print(f"[bold]{label}[/bold]")
+        for r in rows:
+            console.print(
+                f"  [cyan]{r['cve_id']:<28}[/cyan]  {r['name']}"
+            )
+        console.print()
+
+    _print(safe, "Safe checks (always run with --cves)")
+    _print(loud, "Aggressive checks (require --aggressive — generate Event 5145)")
 
 
 def cmd_show_scan(scan_id: int):
@@ -507,8 +540,12 @@ def run_scan(args):
         log.section("CVE & Misconfiguration Checks")
         if args.aggressive:
             log.warn("Aggressive mode ON — RPC probes will generate Windows Event 5145")
+        only_cves = None
+        if args.only_cves:
+            only_cves = {x.strip() for x in args.only_cves.split(",") if x.strip()}
         cve_results = CVEScanner(ldap, args.dc_ip, args.domain).run(
-            aggressive=args.aggressive
+            aggressive=args.aggressive,
+            only=only_cves,
         )
         print_cve_results(cve_results)
 
@@ -672,6 +709,10 @@ def main():
 
     if args.diff:
         cmd_diff(args.diff[0], args.diff[1])
+        return
+
+    if args.list_cves:
+        cmd_list_cves()
         return
 
     # Live scan
