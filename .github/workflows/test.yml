@@ -1,0 +1,58 @@
+name: test
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  pytest:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install package + dev deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e '.[dev]'
+
+      # Coverage gate is set to 50 — current baseline is ~57%. Brief §6
+      # targets 60% for v1.2 final acceptance; this floor is just the
+      # regression guard so a PR that drops coverage by 7+ points fails CI.
+      - name: pytest --cov
+        run: |
+          pytest \
+            --cov=kerb_map \
+            --cov-report=term-missing \
+            --cov-fail-under=50
+
+      # Argparse smoke — catches "your CLI doesn't even import" regressions
+      # that no unit test would notice.
+      - name: CLI smoke
+        run: |
+          python -c "from kerb_map.cli import build_parser; build_parser().parse_args(['--help'])"
+
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Build sdist + wheel
+        run: |
+          python -m pip install --upgrade pip build
+          python -m build
+
+      - name: Upload distribution artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
+          retention-days: 30
