@@ -26,12 +26,30 @@ def isolated_state_dir(tmp_path, monkeypatch):
 # ────────────────────────────────────────────── factory + flush ─
 
 
-def test_new_state_has_uuid_scan_id():
+def test_new_state_has_uuid_scan_id(isolated_state_dir):
     state = rs.ResumeState.new(domain="corp.local")
     assert state.scan_id
     assert len(state.scan_id) >= 8
     assert state.domain == "corp.local"
     assert state.completed == {}
+
+
+def test_new_state_eagerly_flushes_to_disk(isolated_state_dir):
+    """Field bug: pre-fix, the in_progress JSON was only written on the
+    first ``record()`` call. The CLI announces "Scan id: X — resume
+    with --resume X if interrupted" right after ``new()``, so an
+    operator who Ctrl-C'd before any v2/CVE module completed would
+    see the announcement but ``--resume X`` would fail with "no
+    resumable scan matches X" — the tool lying about its own
+    capability. Eager flush makes the announcement honest."""
+    state = rs.ResumeState.new(domain="corp.local")
+    path = isolated_state_dir / f"{state.scan_id}.json"
+    assert path.is_file()
+    # And it loads back even with no modules recorded.
+    loaded = rs.ResumeState.load(state.scan_id)
+    assert loaded is not None
+    assert loaded.scan_id == state.scan_id
+    assert loaded.completed == {}
 
 
 def test_record_writes_state_to_disk(isolated_state_dir):

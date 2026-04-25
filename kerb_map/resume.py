@@ -54,12 +54,26 @@ class ResumeState:
 
     @classmethod
     def new(cls, *, domain: str) -> ResumeState:
-        """Fresh scan — generate a UUID, stamp now, no completed modules."""
-        return cls(
+        """Fresh scan — generate a UUID, stamp now, flush immediately
+        so the on-disk file exists before any module runs.
+
+        Field bug it fixes: the CLI prints "Scan id: X — resume with
+        --resume X if interrupted" right after this returns. Pre-fix,
+        the in_progress JSON was only written on the first ``record()``
+        call (i.e. after the first v2/CVE module completed). An operator
+        who Ctrl-C'd during the legacy SPN/ASREP/delegation modules
+        would see the announcement but ``--resume X`` would fail with
+        "no resumable scan matches X". Eager flush makes the
+        announcement honest — even an early Ctrl-C can be resumed
+        (it just re-runs everything, which is the expected semantics
+        of "no work lost")."""
+        state = cls(
             scan_id    = uuid.uuid4().hex[:12],
             domain     = domain,
             started_at = datetime.datetime.now().isoformat(timespec="seconds"),
         )
+        state._flush()
+        return state
 
     @classmethod
     def load(cls, scan_id: str) -> ResumeState | None:
