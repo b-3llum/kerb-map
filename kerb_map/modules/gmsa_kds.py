@@ -265,6 +265,17 @@ class GmsaKdsAudit(Module):
     # ------------------------------------------------------------------ #
 
     def _inventory_dmsas(self, ctx: ScanContext) -> list[dict]:
+        # Field bug from a Server 2019 lab: dMSA is a Server 2025-only
+        # objectClass, and ldap3 (with get_info=ALL) validates the
+        # filter against the schema *before* sending — raising
+        # LDAPObjectClassError on pre-2025 DCs. ldap_client.query()
+        # catches it but emits an alarming "LDAP query failed" line
+        # that suggests something's broken when really the domain just
+        # doesn't have dMSAs. Pre-flight the schema instead so the
+        # operator-facing log stays quiet on the common case.
+        if not _schema_has_class(ctx.ldap,
+                                 "msDS-DelegatedManagedServiceAccount"):
+            return []
         entries = ctx.ldap.query(
             search_filter="(objectClass=msDS-DelegatedManagedServiceAccount)",
             attributes=[
@@ -299,3 +310,22 @@ def _is_meaningful_read(ace) -> bool:
         | ADS_RIGHT_DS_CONTROL_ACCESS
         | ADS_RIGHT_DS_READ_DAC
     )
+
+
+def _schema_has_class(ldap_client, object_class: str) -> bool:
+    """Check whether the DC's schema knows ``object_class``. Used to
+    skip queries for classes that don't exist on this DFL — chiefly
+    msDS-DelegatedManagedServiceAccount, which is Server 2025-only.
+
+    ldap3 (with ``get_info=ALL``) populates ``server.schema`` from the
+    root DSE during connect. Walk the cached object_classes; bail
+    quietly when the schema attribute isn't populated (older ldap3
+    versions, or a connect that skipped get_info)."""
+    try:
+        schema = ldap_client.conn.server.schema
+        if schema is None or not getattr(schema, "object_classes", None):
+            return True   # unknown — let the query try, ldap_client logs the error
+        wanted = object_class.lower()
+        return any(name.lower() == wanted for name in schema.object_classes)
+    except Exception:
+        return True  # any failure → don't false-suppress, let the query attempt
