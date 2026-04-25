@@ -35,7 +35,7 @@ from kerb_map.modules.scorer import Scorer
 from kerb_map.modules.spn_scanner import SPNScanner
 from kerb_map.modules.trust_mapper import TrustMapper
 from kerb_map.modules.user_enumerator import UserEnumerator
-from kerb_map.output.exporter import BloodHoundExporter, JSONExporter
+from kerb_map.output.exporter import BloodHoundLiteExporter, JSONExporter
 from kerb_map.output.logger import Logger, console
 from kerb_map.output.reporter import (
     print_asrep_results,
@@ -138,8 +138,10 @@ Examples:
     # ── Output ────────────────────────────────────────────────────
     out = p.add_argument_group("Output")
     out.add_argument("-o", "--output",
-                     choices=["json", "bloodhound"],
-                     help="Write results to file in chosen format")
+                     choices=["json", "bloodhound-lite"],
+                     help="Write results to file. 'bloodhound-lite' is kerb-map's "
+                          "own JSON shape (NOT ingestible into BloodHound CE / 4.x / 5.x; "
+                          "see exporter.BloodHoundLiteExporter docstring)")
     out.add_argument("--outfile", default=None,
                      help="Output filename (default: kerb-map_<domain>_<ts>.<ext>)")
     out.add_argument("--top",    type=int, default=15,
@@ -516,14 +518,14 @@ def run_scan(args):
     # ── File export ───────────────────────────────────────────────
     if args.output:
         ts  = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-        ext = "json" if args.output == "json" else "bloodhound.json"
+        ext = "json" if args.output == "json" else "bloodhound-lite.json"
         default_name = f"kerb-map_{args.domain}_{ts}.{ext}"
         outfile      = args.outfile or default_name
 
         if args.output == "json":
             JSONExporter().export(full_data, outfile)
-        elif args.output == "bloodhound":
-            BloodHoundExporter().export(full_data, outfile)
+        elif args.output == "bloodhound-lite":
+            BloodHoundLiteExporter().export(full_data, outfile)
 
     ldap.close()
 
