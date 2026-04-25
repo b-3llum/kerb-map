@@ -104,32 +104,56 @@ class LDAPClient:
     #  Query Interface                                                     #
     # ------------------------------------------------------------------ #
 
+    # RFC 2696 simple paged results control OID — Windows DCs cap each
+    # response at MaxPageSize (default 1000). Without paging, every query
+    # against a domain with >1000 matching objects silently truncates.
+    _PAGED_RESULTS_OID = "1.2.840.113556.1.4.319"
+
     def query(
         self,
         search_filter: str,
         attributes:    list[str],
         search_base:   str | None = None,
         size_limit:    int = 0,
+        page_size:     int = 1000,
     ):
-        """Core query — stealth mode injects random jitter between calls."""
+        """Core query. Pages results past the server's MaxPageSize so large
+        domains are not silently truncated. Returns a flat list of
+        ``ldap3.Entry`` objects (same shape callers already expect).
+        """
         if self.stealth:
             time.sleep(random.uniform(0.4, 2.0))
 
         base = search_base or self.base_dn
         self._query_count += 1
 
+        collected: list = []
+        cookie = None
         try:
-            self.conn.search(
-                search_base=base,
-                search_filter=search_filter,
-                search_scope=SUBTREE,
-                attributes=attributes,
-                size_limit=size_limit,
-            )
-            return self.conn.entries
+            while True:
+                self.conn.search(
+                    search_base=base,
+                    search_filter=search_filter,
+                    search_scope=SUBTREE,
+                    attributes=attributes,
+                    size_limit=size_limit,
+                    paged_size=page_size,
+                    paged_cookie=cookie,
+                )
+                collected.extend(self.conn.entries)
+
+                controls = (self.conn.result or {}).get("controls") or {}
+                cookie = (
+                    controls.get(self._PAGED_RESULTS_OID, {})
+                            .get("value", {})
+                            .get("cookie")
+                )
+                if not cookie:
+                    break
+            return collected
         except LDAPException as e:
             console.print(f"[yellow][!] LDAP query failed ({search_filter[:50]}): {e}[/yellow]")
-            return []
+            return collected
 
     def query_config(self, search_filter: str, attributes: list[str]):
         """Query the Configuration naming context — needed for AD CS, schema."""
