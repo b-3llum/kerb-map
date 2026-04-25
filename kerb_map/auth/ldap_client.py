@@ -220,7 +220,10 @@ class LDAPClient:
         cookie = None
         try:
             while True:
-                self.conn.search(
+                # Only forward `controls=` when present — ldap3's
+                # MOCK_SYNC strategy crashes on None/empty controls
+                # (TypeError: 'string indices must be integers').
+                search_kwargs = dict(
                     search_base=base,
                     search_filter=search_filter,
                     search_scope=SUBTREE,
@@ -228,8 +231,10 @@ class LDAPClient:
                     size_limit=size_limit,
                     paged_size=page_size,
                     paged_cookie=cookie,
-                    controls=controls,
                 )
+                if controls:
+                    search_kwargs["controls"] = controls
+                self.conn.search(**search_kwargs)
                 collected.extend(self.conn.entries)
 
                 controls = (self.conn.result or {}).get("controls") or {}
