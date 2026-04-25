@@ -197,3 +197,75 @@ def is_domain_sid(sid: str | None) -> bool:
     """True for a domain-or-below SID (``S-1-5-21-...``); False for
     well-known SIDs like Domain Admins-relative-id-only or builtin."""
     return bool(sid) and sid.startswith("S-1-5-21-")
+
+
+# ────────────────────────────────────────────────────────────────────── #
+#  Recursive group membership                                            #
+# ────────────────────────────────────────────────────────────────────── #
+
+
+# OID for the "matching rule in chain" extensible match. When you write
+# `(memberOf:1.2.840.113556.1.4.1941:=<group_dn>)` against a Windows DC,
+# the server walks the memberOf chain server-side and returns every
+# direct *and* nested member. That's what we want for "is Steve
+# effectively a Domain Admin?" — a single LDAP query, no client-side
+# recursion, no risk of cycles, and it works for any depth the directory
+# can express.
+LDAP_MATCHING_RULE_IN_CHAIN = "1.2.840.113556.1.4.1941"
+
+
+def is_member_of(ldap_client, account_dn: str, group_dn: str,
+                 *, max_depth: int = 8) -> bool:
+    """True if ``account_dn`` is a direct or nested member of ``group_dn``.
+
+    Uses the matching-rule-in-chain extensible match — one LDAP query,
+    server-side walk. ``max_depth`` is informational only (the server
+    bounds the chain length internally; we accept the parameter so
+    callers can document intent).
+
+    Returns False on any LDAP error (the conservative answer — a
+    transient query failure shouldn't make an account appear privileged).
+    """
+    if not account_dn or not group_dn:
+        return False
+    _ = max_depth  # documented, not enforced — server bounds the walk
+    try:
+        results = ldap_client.query(
+            search_filter=f"(memberOf:{LDAP_MATCHING_RULE_IN_CHAIN}:={group_dn})",
+            attributes=["distinguishedName"],
+            search_base=account_dn,
+        )
+    except Exception:
+        return False
+    if not results:
+        return False
+    # The query returns the account itself if it's in the chain. Match
+    # by DN to be defensive against false positives (e.g. a DC search
+    # returning unrelated entries).
+    target = account_dn.lower()
+    for entry in results:
+        try:
+            dn = entry["distinguishedName"].value
+        except (KeyError, AttributeError):
+            continue
+        if dn and str(dn).lower() == target:
+            return True
+    return False
+
+
+def find_chain_members(ldap_client, group_dn: str, *,
+                       attributes: list[str] | None = None) -> list:
+    """Return every direct and nested member of ``group_dn`` as a list of
+    ldap3 entries. Used when the caller wants the *whole* recursive
+    membership set rather than yes/no for a specific account."""
+    if not group_dn:
+        return []
+    if attributes is None:
+        attributes = ["sAMAccountName", "distinguishedName", "objectSid"]
+    try:
+        return ldap_client.query(
+            search_filter=f"(memberOf:{LDAP_MATCHING_RULE_IN_CHAIN}:={group_dn})",
+            attributes=attributes,
+        )
+    except Exception:
+        return []
