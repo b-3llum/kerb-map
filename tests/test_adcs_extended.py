@@ -278,6 +278,285 @@ def test_esc15_v2_template_does_not_fire(monkeypatch):
 # ────────────────────────────────────────────── summary counts ───
 
 
+# ────────────────────────────────────────────── ESC4 ─────────────
+
+
+def test_esc4_writeproperty_template_acl_to_non_admin_is_critical(monkeypatch):
+    """Random user with GenericAll on a template = ESC4 → can re-DACL
+    or convert template into ESC1. CRITICAL."""
+    from kerb_map.acl import ADS_RIGHT_WRITE_DAC
+    tpl = _entry({
+        "cn":                              "VictimTemplate",
+        "displayName":                     "Victim Template",
+        "distinguishedName":               "CN=VictimTemplate,...",
+        "msPKI-Template-Schema-Version":   2,
+        "msPKI-Enrollment-Flag":           0,
+        "msPKI-Certificate-Policy":        [],
+        "nTSecurityDescriptor":            b"<sd>",
+    })
+    monkeypatch.setattr("kerb_map.modules.adcs_extended.parse_sd", lambda raw: object())
+    monkeypatch.setattr(
+        "kerb_map.modules.adcs_extended.walk_aces",
+        lambda sd, object_dn="": [
+            AceMatch(object_dn=object_dn,
+                     trustee_sid="S-1-5-21-1-2-3-1500",
+                     access_mask=ADS_RIGHT_WRITE_DAC,
+                     object_type_guid=None, ace_type=0x00),
+        ])
+    monkeypatch.setattr(
+        "kerb_map.modules.adcs_extended.resolve_sids",
+        lambda ldap, sids, base_dn: {
+            "S-1-5-21-1-2-3-1500": {"sAMAccountName": "rogue_admin",
+                                    "distinguishedName": "...",
+                                    "objectClass": "user"}})
+
+    ctx = _ctx([[tpl], []])
+    result = AdcsExtended().scan(ctx)
+    esc4 = [f for f in result.findings if "ESC4" in f.attack]
+    assert len(esc4) == 1
+    assert esc4[0].severity == "CRITICAL"
+    assert esc4[0].priority == 93   # WriteDACL
+    assert "WriteDACL" in esc4[0].attack
+    assert "rogue_admin" in esc4[0].reason   # SID resolved to friendly name
+    assert "certipy template" in esc4[0].next_step or "dacledit" in esc4[0].next_step
+
+
+def test_esc4_well_known_writer_suppressed(monkeypatch):
+    """Domain Admins / SYSTEM having full control on a template is by
+    design — must NOT fire ESC4."""
+    from kerb_map.acl import ADS_RIGHT_GENERIC_ALL
+    tpl = _entry({
+        "cn":                              "AdminTemplate",
+        "distinguishedName":               "CN=AdminTemplate,...",
+        "msPKI-Template-Schema-Version":   2,
+        "msPKI-Enrollment-Flag":           0,
+        "msPKI-Certificate-Policy":        [],
+        "nTSecurityDescriptor":            b"<sd>",
+    })
+    monkeypatch.setattr("kerb_map.modules.adcs_extended.parse_sd", lambda raw: object())
+    monkeypatch.setattr(
+        "kerb_map.modules.adcs_extended.walk_aces",
+        lambda sd, object_dn="": [
+            AceMatch(object_dn=object_dn,
+                     trustee_sid="S-1-5-21-1-2-3-512",  # Domain Admins
+                     access_mask=ADS_RIGHT_GENERIC_ALL,
+                     object_type_guid=None, ace_type=0x00),
+        ])
+    monkeypatch.setattr("kerb_map.modules.adcs_extended.resolve_sids", lambda *a, **kw: {})
+
+    ctx = _ctx([[tpl], []])
+    result = AdcsExtended().scan(ctx)
+    assert all("ESC4" not in f.attack for f in result.findings)
+
+
+# ────────────────────────────────────────────── ESC5 ─────────────
+
+
+def _benign_template_entry():
+    """Stub template that produces zero findings — used by ESC5/ESC7
+    tests to get past the early-return gate (the module bails when
+    no templates exist, which would short-circuit the PKI/CA audits)."""
+    return _entry({
+        "cn":                              "Stub",
+        "distinguishedName":               "CN=Stub,...",
+        "msPKI-Template-Schema-Version":   2,
+        "msPKI-Enrollment-Flag":           0,
+        "msPKI-Certificate-Policy":        [],
+        # Empty SD (parse_sd will be monkeypatched to return None for it)
+        "nTSecurityDescriptor":            b"",
+    })
+
+
+def test_esc5_pki_container_writer_emits_finding(monkeypatch):
+    """Non-default principal with GenericAll on the Public Key Services
+    container → ESC5 CRITICAL. Three containers are checked; only the
+    first returns content."""
+    from kerb_map.acl import ADS_RIGHT_GENERIC_ALL
+    stub_tpl = _benign_template_entry()
+    container_entry = _entry({
+        "distinguishedName":    "CN=Public Key Services,CN=Services,CN=Configuration,DC=corp,DC=local",
+        "nTSecurityDescriptor": b"<sd>",
+    })
+
+    # parse_sd: returns object() for non-empty SDs (so walk_aces fires),
+    # None for the stub template (so its DACL walk produces zero ACEs).
+    def fake_parse_sd(raw):
+        return object() if raw else None
+    monkeypatch.setattr("kerb_map.modules.adcs_extended.parse_sd", fake_parse_sd)
+
+    monkeypatch.setattr(
+        "kerb_map.modules.adcs_extended.walk_aces",
+        lambda sd, object_dn="": [
+            AceMatch(object_dn=object_dn,
+                     trustee_sid="S-1-5-21-1-2-3-1700",
+                     access_mask=ADS_RIGHT_GENERIC_ALL,
+                     object_type_guid=None, ace_type=0x00),
+        ])
+    monkeypatch.setattr(
+        "kerb_map.modules.adcs_extended.resolve_sids",
+        lambda ldap, sids, base_dn: {
+            "S-1-5-21-1-2-3-1700": {"sAMAccountName": "ca_helpdesk",
+                                    "distinguishedName": "...",
+                                    "objectClass": "user"}})
+
+    ldap = MagicMock()
+    qq = [
+        [container_entry],   # CN=Public Key Services
+        [],                  # CN=Certificate Templates  (empty)
+        [],                  # CN=Enrollment Services    (empty)
+    ]
+    ldap.query.side_effect = lambda **_: qq.pop(0) if qq else []
+    qc = [[stub_tpl], [], []]   # one stub template, no OIDs, no CAs
+    ldap.query_config.side_effect = lambda **_: qc.pop(0) if qc else []
+    ctx = ScanContext(ldap=ldap, domain="corp.local",
+                      base_dn="DC=corp,DC=local", dc_ip="10.0.0.1",
+                      domain_sid="S-1-5-21-1-2-3")
+
+    result = AdcsExtended().scan(ctx)
+    esc5 = [f for f in result.findings if "ESC5" in f.attack]
+    assert len(esc5) == 1
+    assert esc5[0].severity == "CRITICAL"
+    assert "Public Key Services" in esc5[0].target
+
+
+# ────────────────────────────────────────────── ESC7 ─────────────
+
+
+def test_esc7_manage_ca_only_is_high(monkeypatch):
+    """ManageCA alone = HIGH. The operator can take over the CA but
+    needs ManageCertificates to issue arbitrary certs without going
+    through the full takeover dance."""
+    from kerb_map.acl import ADS_RIGHT_DS_CONTROL_ACCESS
+    from kerb_map.modules.adcs_extended import EXT_RIGHT_MANAGE_CA
+    ca_entry = _entry({
+        "cn":                   "CORP-CA",
+        "displayName":          "CORP Issuing CA",
+        "distinguishedName":    "CN=CORP-CA,CN=Enrollment Services,...",
+        "nTSecurityDescriptor": b"<sd>",
+    })
+    monkeypatch.setattr("kerb_map.modules.adcs_extended.parse_sd", lambda raw: object())
+    monkeypatch.setattr(
+        "kerb_map.modules.adcs_extended.walk_aces",
+        lambda sd, object_dn="": [
+            AceMatch(object_dn=object_dn,
+                     trustee_sid="S-1-5-21-1-2-3-1900",
+                     access_mask=ADS_RIGHT_DS_CONTROL_ACCESS,
+                     object_type_guid=EXT_RIGHT_MANAGE_CA,
+                     ace_type=0x05),
+        ])
+    monkeypatch.setattr(
+        "kerb_map.modules.adcs_extended.resolve_sids",
+        lambda ldap, sids, base_dn: {
+            "S-1-5-21-1-2-3-1900": {"sAMAccountName": "ca_op",
+                                    "distinguishedName": "...",
+                                    "objectClass": "user"}})
+
+    ctx = _ctx([[]], query_responses=None)  # no templates
+    # _ctx only takes query_config_responses; build manually for this test
+    stub_tpl = _benign_template_entry()
+    ldap = MagicMock()
+    ldap.query.return_value = []   # no PKI containers
+    qc = [[stub_tpl], [], [ca_entry]]   # one stub template, no OIDs, one CA
+    ldap.query_config.side_effect = lambda **_: qc.pop(0) if qc else []
+    ctx = ScanContext(ldap=ldap, domain="corp.local",
+                      base_dn="DC=corp,DC=local", dc_ip="10.0.0.1",
+                      domain_sid="S-1-5-21-1-2-3")
+
+    result = AdcsExtended().scan(ctx)
+    esc7 = [f for f in result.findings if "ESC7" in f.attack]
+    assert len(esc7) == 1
+    assert esc7[0].severity == "HIGH"
+    assert esc7[0].priority == 85
+    assert "ManageCA" in esc7[0].attack
+    assert "ca_op" in esc7[0].reason
+
+
+def test_esc7_both_rights_is_critical(monkeypatch):
+    """ManageCA + ManageCertificates = full CA admin. CRITICAL 94."""
+    from kerb_map.acl import ADS_RIGHT_DS_CONTROL_ACCESS
+    from kerb_map.modules.adcs_extended import (
+        EXT_RIGHT_MANAGE_CA,
+        EXT_RIGHT_MANAGE_CERTIFICATES,
+    )
+    ca_entry = _entry({
+        "cn":                   "CORP-CA",
+        "distinguishedName":    "CN=CORP-CA,CN=Enrollment Services,...",
+        "nTSecurityDescriptor": b"<sd>",
+    })
+    monkeypatch.setattr("kerb_map.modules.adcs_extended.parse_sd", lambda raw: object())
+    monkeypatch.setattr(
+        "kerb_map.modules.adcs_extended.walk_aces",
+        lambda sd, object_dn="": [
+            AceMatch(object_dn=object_dn,
+                     trustee_sid="S-1-5-21-1-2-3-1900",
+                     access_mask=ADS_RIGHT_DS_CONTROL_ACCESS,
+                     object_type_guid=EXT_RIGHT_MANAGE_CA,
+                     ace_type=0x05),
+            AceMatch(object_dn=object_dn,
+                     trustee_sid="S-1-5-21-1-2-3-1900",
+                     access_mask=ADS_RIGHT_DS_CONTROL_ACCESS,
+                     object_type_guid=EXT_RIGHT_MANAGE_CERTIFICATES,
+                     ace_type=0x05),
+        ])
+    monkeypatch.setattr(
+        "kerb_map.modules.adcs_extended.resolve_sids",
+        lambda ldap, sids, base_dn: {
+            "S-1-5-21-1-2-3-1900": {"sAMAccountName": "ca_admin_pretender",
+                                    "distinguishedName": "...",
+                                    "objectClass": "user"}})
+
+    stub_tpl = _benign_template_entry()
+    ldap = MagicMock()
+    ldap.query.return_value = []
+    qc = [[stub_tpl], [], [ca_entry]]
+    ldap.query_config.side_effect = lambda **_: qc.pop(0) if qc else []
+    ctx = ScanContext(ldap=ldap, domain="corp.local",
+                      base_dn="DC=corp,DC=local", dc_ip="10.0.0.1",
+                      domain_sid="S-1-5-21-1-2-3")
+
+    result = AdcsExtended().scan(ctx)
+    esc7 = [f for f in result.findings if "ESC7" in f.attack]
+    assert len(esc7) == 1
+    assert esc7[0].severity == "CRITICAL"
+    assert esc7[0].priority == 94
+    assert "ManageCA" in esc7[0].attack
+    assert "ManageCertificates" in esc7[0].attack
+
+
+def test_esc7_well_known_admin_writer_suppressed(monkeypatch):
+    """Domain Admins / SYSTEM with ManageCA on the CA is by design."""
+    from kerb_map.acl import ADS_RIGHT_GENERIC_ALL
+    ca_entry = _entry({
+        "cn":                   "CORP-CA",
+        "distinguishedName":    "CN=CORP-CA,...",
+        "nTSecurityDescriptor": b"<sd>",
+    })
+    monkeypatch.setattr("kerb_map.modules.adcs_extended.parse_sd", lambda raw: object())
+    monkeypatch.setattr(
+        "kerb_map.modules.adcs_extended.walk_aces",
+        lambda sd, object_dn="": [
+            AceMatch(object_dn=object_dn,
+                     trustee_sid="S-1-5-21-1-2-3-512",  # Domain Admins
+                     access_mask=ADS_RIGHT_GENERIC_ALL,
+                     object_type_guid=None, ace_type=0x00),
+        ])
+    monkeypatch.setattr("kerb_map.modules.adcs_extended.resolve_sids", lambda *a, **kw: {})
+
+    ldap = MagicMock()
+    ldap.query.return_value = []
+    qc = [[], [], [ca_entry]]
+    ldap.query_config.side_effect = lambda **_: qc.pop(0) if qc else []
+    ctx = ScanContext(ldap=ldap, domain="corp.local",
+                      base_dn="DC=corp,DC=local", dc_ip="10.0.0.1",
+                      domain_sid="S-1-5-21-1-2-3")
+
+    result = AdcsExtended().scan(ctx)
+    assert all("ESC7" not in f.attack for f in result.findings)
+
+
+# ────────────────────────────────────────────── summary ─────────────
+
+
 def test_summary_reflects_finding_buckets(monkeypatch):
     """Three templates, one of each ESC type, should give summary 1/1/1."""
     tpl_esc9 = _entry({
@@ -308,3 +587,8 @@ def test_summary_reflects_finding_buckets(monkeypatch):
     assert s["templates_total"] == 2
     assert s["esc9_count"]  == 1
     assert s["esc15_count"] == 1
+    # New summary keys for ESC4/5/7 — present even at zero so JSON
+    # consumers can rely on the schema.
+    assert "esc4_count" in s
+    assert "esc5_count" in s
+    assert "esc7_count" in s
