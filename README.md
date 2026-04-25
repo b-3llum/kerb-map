@@ -4,7 +4,7 @@
 
 **Active Directory Kerberos Attack Surface Mapper**
 
-![version](https://img.shields.io/badge/version-1.1.0-blue)
+![version](https://img.shields.io/badge/version-1.2.0-blue)
 ![python](https://img.shields.io/badge/python-3.10+-blue)
 ![platform](https://img.shields.io/badge/platform-Linux-lightgrey)
 ![license](https://img.shields.io/badge/license-MIT-lightgrey)
@@ -21,6 +21,8 @@ All LDAP queries are read-only. RPC-based CVE probes that generate Windows event
 
 ## Modules
 
+### Legacy modules (single LDAP scan)
+
     --spn          Kerberoastable account discovery & scoring
     --asrep        AS-REP roastable accounts (no creds needed)
     --delegation   Unconstrained / Constrained / RBCD mapping
@@ -30,10 +32,39 @@ All LDAP queries are read-only. RPC-based CVE probes that generate Windows event
     --cves         CVE detection (ZeroLogon, noPac, ESC1-8, Certifried...)
     --hygiene      Defensive posture audit (krbtgt age, LAPS coverage,
                    SID History, FGPP, credential exposure, stale machines...)
-    --aggressive   Enable RPC probes (louder — Event 5145)
-    -o json        Export results to JSON or BloodHound-Lite format
-                   (bloodhound-lite is a custom JSON shape — NOT
-                    BloodHound-CE ingestible; see exporter docstring)
+
+### v2 plugin modules (`--v2`, auto-discovered)
+
+    DCSync rights              non-default Get-Changes(-All) holders on the domain root
+    Shadow Credentials         msDS-KeyCredentialLink writers + KCL inventory
+    BadSuccessor               dMSA predecessor-link abuse (CVE-2025-53779)
+    Pre-Win2k Compatible Access  Authenticated Users membership in S-1-5-32-554
+    GMSA / dMSA + KDS root key   Golden dMSA prereq (Semperis, July 2025)
+    Tier-0 ACL audit           DACL walk on AdminSDHolder, DA/EA/SA, adminCount=1
+    User ACL audit             lateral edges on every enabled non-Tier-0 user
+    OU computer-create         RBCD pivot survival check (post-MAQ=0)
+    AD CS Extended             ESC4 / ESC5 / ESC7 / ESC9 / ESC13 / ESC15 (EKUwu)
+    Coercion module            PetitPotam / DFSCoerce / PrinterBug surface
+
+### No-creds modules (no `-u`/`-p` needed)
+
+    --timeroast                MS-SNTP machine-account hash recovery (Tervoort)
+    --spray                    Lockout-aware password spray (gated, confirms)
+
+### Output
+
+    -o json                    Full structured dump
+    -o bloodhound-ce           Real BloodHound CE 5.x ingestible zip + KerbMap edges
+    -o csv                     One row per priority target (spreadsheet)
+    -o markdown                Operator report (drops into Obsidian)
+    -o bloodhound-lite         Legacy custom JSON shape (NOT BH-ingestible)
+
+### Other
+
+    --aggressive               Enable RPC probes (louder — Event 5145)
+    --diff <A> <B>             Diff two cached scans (REMOVED / ADDED / UNCHANGED)
+    --resume <ID>              Continue an interrupted scan
+    --list-resumable           Show in-progress scans
 
 ---
 
@@ -126,49 +157,149 @@ kerb-map -d corp.local -dc 192.168.1.10 -u jsmith -k
 ### Common Examples
 
 ```bash
-# Full scan — all modules, safe CVE checks only
-kerb-map -d corp.local -dc 192.168.1.10 -u jsmith -p Password123 --all --cves
+# Full scan — all modules + v2 plugin contract
+kerb-map -d corp.local -dc 192.168.1.10 -u jsmith -p Password123 --all --v2
 
-# Full scan + aggressive RPC CVE probes + JSON export
+# Full scan + aggressive RPC CVE probes + BloodHound CE export
 kerb-map -d corp.local -dc 192.168.1.10 -u jsmith -p Password123 \
-    --all --cves --aggressive -o json
+    --all --v2 --aggressive -o bloodhound-ce --outfile scan.bh.zip
 
 # Stealth mode — LDAP jitter, no RPC probes
 kerb-map -d corp.local -dc 192.168.1.10 -u jsmith -p Password123 --stealth
 
-# CVE checks only
-kerb-map -d corp.local -dc 192.168.1.10 -u jsmith -p Password123 --cves
+# CVE checks only, just one CVE family
+kerb-map -d corp.local -dc 192.168.1.10 -u jsmith -p Password123 \
+    --cves --only-cves CVE-2021-42278/42287
 
-# View stored scan history
+# Markdown operator report
+kerb-map -d corp.local -dc 192.168.1.10 -u jsmith -p Password123 \
+    --all --v2 -o markdown
+
+# Resume an interrupted scan
+kerb-map --list-resumable
+kerb-map -d corp.local -dc 192.168.1.10 -u jsmith -p Password123 --resume <id>
+
+# Diff two scans (retest workflow)
+kerb-map --diff 5 7
+```
+
+### No-creds workflows
+
+```bash
+# Timeroast — recover machine-account NT hashes via MS-SNTP (no creds)
+kerb-map --timeroast -dc 192.168.1.10 \
+    --timeroast-rids 1000-2000 --timeroast-out hashes.txt
+# Crack with: hashcat -m 31300 hashes.txt rockyou.txt
+
+# Password spray — lockout-aware, requires confirmation
+kerb-map --spray -d corp.local -dc 192.168.1.10 -u <known> -p <known> \
+    --spray-yes        # skip confirm; for scripted runs
+# Or with a pre-built user list (no LDAP discovery needed):
+kerb-map --spray -d corp.local -dc 192.168.1.10 \
+    --spray-users-file users.txt --spray-passwords-file pw.txt
+```
+
+### Verbosity & log capture
+
+```bash
+# Quiet: only WARN+ — for cron / log capture
+kerb-map -d corp.local -dc 192.168.1.10 -u jsmith -p Password123 -q
+
+# Verbose: per-module debug detail
+kerb-map -d corp.local -dc 192.168.1.10 -u jsmith -p Password123 -v
+
+# Wire view: raw LDAP filter logging on every search
+kerb-map -d corp.local -dc 192.168.1.10 -u jsmith -p Password123 -vv
+
+# Disable colour for tee logfile.txt
+kerb-map -d corp.local -dc 192.168.1.10 -u jsmith -p Password123 \
+    --no-color | tee scan.log
+
+# View stored scan history (now with severity histogram + duration)
 kerb-map --list-scans
 kerb-map --show-scan 3
 ```
 
 ### Full Flag Reference
 
+#### Target / auth
+
 | Flag | Description |
 |---|---|
 | `-d / --domain` | Target domain (e.g. corp.local) |
 | `-dc / --dc-ip` | Domain controller IP |
 | `-u / --username` | Domain username |
-| `-p / --password` | Plaintext password |
-| `-H / --hash` | NTLM hash — LM:NT or NT only |
+| `-p / --password [VALUE]` | Plaintext password — omit value to prompt |
+| `--password-stdin` | Read password from stdin (recommended) |
+| `--password-env VAR` | Read password from environment variable |
+| `-H / --hash [VALUE]` | NTLM hash — LM:NT or NT only |
+| `--hash-stdin` / `--hash-env VAR` | Same alternatives for the hash |
 | `-k / --kerberos` | Use ccache ticket (set KRB5CCNAME first) |
-| `--all` | Run all modules (default if no module flag given) |
-| `--spn / --asrep / --delegation / --users / --cves` | Run specific modules only |
-| `--encryption` | Weak Kerberos encryption audit (RC4/DES on accounts and DCs) |
-| `--trusts` | Domain trust enumeration with SID filtering risk assessment |
-| `--hygiene` | Defensive hygiene audit (LAPS, krbtgt, SID History, FGPP, stale accounts) |
-| `--aggressive` | Enable RPC CVE probes — generates Windows Event 5145 |
-| `--stealth` | Add random jitter between LDAP queries |
-| `-o json / bloodhound-lite` | Write results to file. `bloodhound-lite` is kerb-map's own JSON shape — **not** ingestible into BloodHound CE / 4.x / 5.x as-is. |
-| `--top N` | Show top N priority targets (default 15) |
-| `--no-cache` | Do not save to local SQLite database |
-| `--timeout N` | LDAP connection timeout in seconds (default: 10) |
+
+#### Module selection
+
+| Flag | Description |
+|---|---|
+| `--all` | Run all legacy modules (default) |
+| `--spn / --asrep / --delegation / --users / --cves` | Run specific legacy modules |
+| `--encryption / --trusts / --hygiene` | Per-module legacy flags |
+| `--v2` | Enable v2 plugin modules (DCSync, Shadow Creds, BadSuccessor, Tier-0 ACL, User ACL, OU computer-create, ADCS Extended, GMSA/dMSA, Pre-Win2k, Coercion) |
+| `--aggressive` | Enable RPC CVE probes — generates Event 5145 |
+| `--list-cves` | Print every CVE check (with CVE-ID + aggressive flag) and exit |
+| `--only-cves IDS` | Run only the named CVE checks (comma-separated) |
+
+#### No-creds attacks (no `-u`/`-p` needed)
+
+| Flag | Description |
+|---|---|
+| `--timeroast` | MS-SNTP machine-account hash recovery (Tervoort/Secura) |
+| `--timeroast-rids START-END` | RID range to sweep (default 1000–1500) |
+| `--timeroast-rate N` | Packets/sec rate cap (default 180 — Tervoort default) |
+| `--timeroast-timeout N` | Per-RID socket timeout in seconds |
+| `--timeroast-out FILE` | Append captured hashes to FILE |
+| `--spray` | Lockout-aware password spray (gated, requires confirmation) |
+| `--spray-users-file FILE` | Spray against SAMs from FILE instead of running ASREP first |
+| `--spray-passwords-file FILE` | Use FILE instead of built-in season+year/domain+year wordlist |
+| `--spray-rate N` | Seconds between bind attempts (default 1.0) |
+| `--spray-yes` | Skip confirmation prompt (for scripted runs) |
+
+#### Output / verbosity
+
+| Flag | Description |
+|---|---|
+| `-o {json, bloodhound-ce, bloodhound-lite, csv, markdown}` | File output format |
 | `--outfile NAME` | Custom output filename |
-| `--list-scans` | List all cached scans |
+| `--top N` | Show top N priority targets (default 15) |
+| `-v / --verbose` (count) | `-v` adds debug, `-vv` adds raw LDAP filter logging |
+| `-q / --quiet` | Only WARN+ — for cron / log capture |
+| `--no-color` | Disable ANSI for `tee logfile.txt` workflows |
+
+#### Tuning / transport
+
+| Flag | Description |
+|---|---|
+| `--stealth` | Add random jitter between LDAP queries |
+| `--timeout N` | LDAP connection timeout in seconds (default: 10) |
+| `--ldaps / --starttls / --no-tls` | Pin a single LDAP transport (default: LDAPS → StartTLS → SASL → plain) |
+
+#### Scan history & resume
+
+| Flag | Description |
+|---|---|
+| `--no-cache` | Do not save to local SQLite database |
+| `--list-scans` | List cached scans (with severity counts + duration) |
 | `--show-scan ID` | Replay findings from a stored scan |
-| `--update` | Pull latest version from GitHub and reinstall |
+| `--diff A B` | Diff two cached scans (REMOVED / ADDED / UNCHANGED) |
+| `--resume ID` | Continue an interrupted scan |
+| `--list-resumable` | Show in-progress scans that can be resumed |
+
+#### Maintenance
+
+| Flag | Description |
+|---|---|
+| `--update` | Pull latest version + reinstall (refuses on dirty tree / detached HEAD) |
+| `--update --tag REF` | Pin to a release tag |
+| `--update --force` | Bypass dirty-tree / detached-HEAD precheck |
 
 ---
 
@@ -177,15 +308,14 @@ kerb-map --show-scan 3
 | Module | Noise | Event IDs | MDI Detection |
 |---|---|---|---|
 | LDAP enumeration (all safe checks) | LOW | 1644 (if diag logging on) | No |
-| Encryption audit | LOW | 1644 | No |
-| Trust mapping | LOW | 1644 | No |
-| Hygiene audit | LOW | 1644 | No |
+| Encryption / Trust / Hygiene audits | LOW | 1644 | No |
 | GPP Passwords (MS14-025) | LOW | 1644 | No |
-| Bronze Bit (CVE-2020-17049) | LOW | 1644 | No |
-| Certifried (CVE-2022-26923) | LOW | 1644 | No |
-| LDAP Signing check | LOW | 1644 | No |
+| Bronze Bit / Certifried / LDAP Signing | LOW | 1644 | No |
+| All v2 plugin modules (DCSync rights, Tier-0 ACL, User ACL, OU computer-create, Shadow Creds, ADCS Extended, GMSA/dMSA, BadSuccessor, Pre-Win2k, Coercion) | LOW | 1644 | No |
+| Timeroast (MS-SNTP, no creds) | LOW | NTP request anomaly only | No |
 | Kerberoasting w/ AES tickets | MEDIUM | 4769 per ticket | Possible |
 | Kerberoasting w/ RC4 tickets | HIGH | 4769 (enc type 0x17) | Yes |
+| Password spray (`--spray`) | HIGH | 4625 per failed bind | Yes |
 | ZeroLogon RPC probe | HIGH | 5827 / 5828 | Yes |
 | PrintNightmare pipe probe | HIGH | 5145 | Yes |
 | PetitPotam EFS probe | HIGH | 5145 | Yes |
