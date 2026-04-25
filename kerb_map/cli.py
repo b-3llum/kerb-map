@@ -58,6 +58,7 @@ from kerb_map.output.reporter import (
     print_user_results,
 )
 from kerb_map.plugin import ScanContext, all_modules, discover
+from kerb_map.substitute import SubstitutionContext, apply_to_findings, substitute
 
 log = Logger()
 
@@ -500,6 +501,17 @@ def run_scan(args):
     domain_info = ldap.get_domain_info()
     print_domain_info(domain_info)
 
+    # Build the placeholder substitution context (brief §3.5). Applied
+    # below to every CVE / v2 / scorer next_step so operators can copy
+    # the recipe straight into a terminal.
+    sub_ctx = SubstitutionContext(
+        dc_ip=args.dc_ip,
+        domain=args.domain,
+        domain_sid=domain_info.get("domain_sid"),
+        dc_fqdn=domain_info.get("dc_dns_hostname"),
+        base_dn=ldap.base_dn,
+    )
+
     # ── Kerberoastable accounts ───────────────────────────────────
     spns = []
     if run_spn:
@@ -555,6 +567,7 @@ def run_scan(args):
             aggressive=args.aggressive,
             only=only_cves,
         )
+        apply_to_findings(cve_results, sub_ctx)
         print_cve_results(cve_results)
 
     # ── Hygiene Audit ────────────────────────────────────────────
@@ -585,6 +598,7 @@ def run_scan(args):
                 log.warn(f"v2 module {cls.name} failed: {e}")
                 continue
             v2_results[cls.flag] = result.raw if result.raw is not None else {}
+            apply_to_findings(result.findings, sub_ctx)
             v2_findings.extend(result.findings)
             for f in result.findings:
                 sev_col = {"CRITICAL": "red", "HIGH": "red", "MEDIUM": "yellow",
@@ -607,6 +621,11 @@ def run_scan(args):
     if v2_findings:
         targets.extend(f.as_dict() for f in v2_findings)
         targets.sort(key=lambda t: t.get("priority", 0), reverse=True)
+    # Catch any next_step strings the legacy Scorer emitted with
+    # placeholders (scorer.py hard-codes <DC_NAME>, <BASE>, etc.).
+    for t in targets:
+        if "next_step" in t:
+            t["next_step"] = substitute(t["next_step"], sub_ctx)
     print_priority_targets(targets, top=args.top)
 
     # ── Summary ───────────────────────────────────────────────────

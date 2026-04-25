@@ -310,6 +310,22 @@ class LDAPClient:
         from kerb_map.ldap_helpers import sid_to_str
         domain_sid = sid_to_str(e["objectSid"].value) if "objectSid" in e else None
 
+        # DC FQDN — needed to substitute <DC_FQDN> / <DC_HOSTNAME> /
+        # <DC_NAME> in next_step recipes. Read from the rootDSE that
+        # ldap3 already populated when we connected with get_info=ALL.
+        # Best-effort: if the server stripped it or the ldap3 attr layout
+        # changes, we just leave the placeholders intact.
+        dc_dns_hostname: str | None = None
+        try:
+            other = self.conn.server.info.other or {}
+            val = other.get("dnsHostName")
+            if isinstance(val, list) and val:
+                dc_dns_hostname = str(val[0])
+            elif isinstance(val, str):
+                dc_dns_hostname = val
+        except Exception:
+            pass
+
         return {
             "domain":                self.domain,
             "functional_level":      FL_MAP.get(fl, str(fl)),
@@ -320,6 +336,7 @@ class LDAPClient:
             "lockout_threshold":     _int("lockoutThreshold"),
             "when_created":          _str("whenCreated"),
             "domain_sid":            domain_sid,
+            "dc_dns_hostname":       dc_dns_hostname,
         }
 
     def close(self):
