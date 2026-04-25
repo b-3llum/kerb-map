@@ -266,3 +266,148 @@ def test_findings_without_required_data_are_skipped(tmp_path):
     out = exporter.export(str(tmp_path / "scan.zip"))
     with zipfile.ZipFile(out) as zf:
         assert "kerbmap_edges.json" not in zf.namelist()
+
+
+# ─────────────────────────── new v2 modules → edges ────────────
+
+
+def _exporter():
+    return BloodHoundCEExporter(
+        ldap=_ldap([[], [], [], []]),
+        domain="corp.local", domain_sid="S-1-5-21-10-20-30",
+        base_dn="DC=corp,DC=local",
+    )
+
+
+def _read_edges(zip_path):
+    with zipfile.ZipFile(zip_path) as zf:
+        return json.loads(zf.read("kerbmap_edges.json"))["data"]
+
+
+def test_esc9_finding_emits_kerbmap_esc9_edge(tmp_path):
+    exp = _exporter()
+    exp.add_findings([Finding(
+        target="EnrolledUserCert",
+        attack="AD CS ESC9 (no security extension)",
+        severity="HIGH", priority=82, reason="...",
+        data={"template_dn": "CN=EnrolledUserCert,...", "enroll_flag": "0x80"},
+    )])
+    out = exp.export(str(tmp_path / "esc9.zip"))
+    edges = _read_edges(out)
+    assert len(edges) == 1
+    assert edges[0]["edge"] == "KerbMapEsc9"
+    assert edges[0]["source"].startswith("CN=EnrolledUserCert")
+    assert edges[0]["props"]["enroll_flag"] == "0x80"
+
+
+def test_esc13_finding_emits_one_edge_per_linked_group(tmp_path):
+    """Operator wants to write `MATCH (t)-[:KerbMapEsc13LinkedTo]->(g)`
+    so each (template, group) pair is queryable individually."""
+    exp = _exporter()
+    exp.add_findings([Finding(
+        target="AdminCert",
+        attack="AD CS ESC13 (OIDToGroupLink)",
+        severity="CRITICAL", priority=92, reason="...",
+        data={
+            "template_dn": "CN=AdminCert,...",
+            "linked_groups": [
+                {"oid": "1.2.3", "group": {"name": "Domain Admins"}, "sid": "S-1-5-21-10-20-30-512"},
+                {"oid": "4.5.6", "group": {"name": "Schema Admins"}, "sid": "S-1-5-21-10-20-30-518"},
+            ],
+        },
+    )])
+    out = exp.export(str(tmp_path / "esc13.zip"))
+    edges = _read_edges(out)
+    assert len(edges) == 2
+    targets = {e["target"] for e in edges}
+    assert targets == {"S-1-5-21-10-20-30-512", "S-1-5-21-10-20-30-518"}
+    for e in edges:
+        assert e["edge"] == "KerbMapEsc13LinkedTo"
+
+
+def test_esc15_finding_emits_kerbmap_esc15_edge(tmp_path):
+    exp = _exporter()
+    exp.add_findings([Finding(
+        target="WebServer",
+        attack="AD CS ESC15 / EKUwu (CVE-2024-49019)",
+        severity="HIGH", priority=80, reason="...",
+        data={"template_dn": "CN=WebServer,...", "schema_version": 1},
+    )])
+    out = exp.export(str(tmp_path / "esc15.zip"))
+    edges = _read_edges(out)
+    assert len(edges) == 1
+    assert edges[0]["edge"] == "KerbMapEsc15"
+    assert edges[0]["props"]["schema_version"] == 1
+
+
+def test_prewin2k_member_emits_membership_edge(tmp_path):
+    exp = _exporter()
+    exp.add_findings([Finding(
+        target="BUILTIN\\Pre-Windows 2000 Compatible Access",
+        attack="Pre-Win2k membership: Authenticated Users",
+        severity="HIGH", priority=78, reason="...",
+        data={"member_sid": "S-1-5-11", "member_name": "Authenticated Users"},
+    )])
+    out = exp.export(str(tmp_path / "prewin2k.zip"))
+    edges = _read_edges(out)
+    assert len(edges) == 1
+    assert edges[0]["edge"] == "KerbMapPreWin2kMember"
+    assert edges[0]["source"] == "S-1-5-11"
+    assert edges[0]["target"] == "S-1-5-32-554"
+
+
+def test_anonymous_ldap_compound_finding_emits_domain_edge(tmp_path):
+    exp = _exporter()
+    exp.add_findings([Finding(
+        target="dsHeuristics + Pre-Win2k",
+        attack="Anonymous LDAP binds enabled with permissive Pre-Win2k",
+        severity="CRITICAL", priority=96, reason="...",
+        data={"ds_heuristics": "0000002"},
+    )])
+    out = exp.export(str(tmp_path / "anon.zip"))
+    edges = _read_edges(out)
+    assert len(edges) == 1
+    assert edges[0]["edge"] == "KerbMapAnonymousLdapEnabled"
+
+
+def test_kds_root_key_finding_emits_one_edge_per_reader(tmp_path):
+    """Each extra reader gets its own edge so individual principals
+    are queryable in BloodHound."""
+    exp = _exporter()
+    exp.add_findings([Finding(
+        target="KDS root key key1",
+        attack="Golden dMSA prerequisite (KDS root key readable)",
+        severity="CRITICAL", priority=97, reason="...",
+        data={
+            "kds_key_cn":        "key1",
+            "extra_reader_sids": ["S-1-5-21-10-20-30-1500", "S-1-5-21-10-20-30-1501"],
+            "extra_reader_sams": ["alice", "bob"],
+        },
+    )])
+    out = exp.export(str(tmp_path / "kds.zip"))
+    edges = _read_edges(out)
+    assert len(edges) == 2
+    sources = {e["source"] for e in edges}
+    assert sources == {"S-1-5-21-10-20-30-1500", "S-1-5-21-10-20-30-1501"}
+    for e in edges:
+        assert e["edge"] == "KerbMapKdsReadable"
+        assert e["target"] == "key1"
+
+
+def test_gmsa_reader_finding_emits_one_edge_per_reader(tmp_path):
+    exp = _exporter()
+    exp.add_findings([Finding(
+        target="gmsa_app$",
+        attack="gMSA password readable by non-default principal",
+        severity="HIGH", priority=82, reason="...",
+        data={
+            "extra_reader_sids": ["S-1-5-21-10-20-30-1700"],
+            "extra_reader_sams": ["appsupport"],
+        },
+    )])
+    out = exp.export(str(tmp_path / "gmsa.zip"))
+    edges = _read_edges(out)
+    assert len(edges) == 1
+    assert edges[0]["edge"] == "KerbMapGmsaReader"
+    assert edges[0]["source"] == "S-1-5-21-10-20-30-1700"
+    assert edges[0]["target"] == "gmsa_app$"

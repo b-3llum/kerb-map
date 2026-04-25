@@ -94,7 +94,9 @@ class BloodHoundCEExporter:
         for f in findings:
             data = (f.data or {}) if hasattr(f, "data") else (f.get("data") or {})
             attack = f.attack if hasattr(f, "attack") else f.get("attack", "")
+            target = f.target if hasattr(f, "target") else f.get("target", "")
 
+            # ── DCSync rights (DCSyncRights module) ─────────────
             if attack == "DCSync (full)" and data.get("principal_sid"):
                 self._extra_edges.append({
                     "source": data["principal_sid"],
@@ -102,6 +104,8 @@ class BloodHoundCEExporter:
                     "edge":   "KerbMapDCSyncBy",
                     "props":  {"rights": data.get("rights_granted", [])},
                 })
+            # ── Shadow Credentials (write-ACL only — inventory       ──
+            #     findings carry no graph endpoints worth an edge)
             elif attack.startswith("Shadow Credentials") and data.get("writer_sid"):
                 self._extra_edges.append({
                     "source": data["writer_sid"],
@@ -109,6 +113,7 @@ class BloodHoundCEExporter:
                     "edge":   "KerbMapAddKeyCredentialLink",
                     "props":  {},
                 })
+            # ── BadSuccessor (BadSuccessor module) ──────────────
             elif attack == "BadSuccessor (staged)" and data.get("dmsa_dn"):
                 self._extra_edges.append({
                     "source": data["dmsa_dn"],
@@ -123,6 +128,78 @@ class BloodHoundCEExporter:
                     "edge":   "KerbMapCanCreateDMSA",
                     "props":  {},
                 })
+            # ── ADCS Extended (AdcsExtended module) ─────────────
+            #
+            # Each ESC variant becomes its own edge type so a BloodHound
+            # operator can write a Cypher query like
+            #   MATCH (u:User)-[:KerbMapEsc13]->(t) RETURN u, t
+            # to find every account that can enrol in an ESC13 template
+            # without having to grep the JSON.
+            elif attack.startswith("AD CS ESC9"):
+                if data.get("template_dn"):
+                    self._extra_edges.append({
+                        "source": data["template_dn"],
+                        "target": self.domain_sid or self.domain,
+                        "edge":   "KerbMapEsc9",
+                        "props":  {"enroll_flag": data.get("enroll_flag")},
+                    })
+            elif attack.startswith("AD CS ESC13"):
+                # One edge per linked privileged group so each is queryable.
+                for grp in data.get("linked_groups", []):
+                    if data.get("template_dn") and grp.get("sid"):
+                        self._extra_edges.append({
+                            "source": data["template_dn"],
+                            "target": grp["sid"],
+                            "edge":   "KerbMapEsc13LinkedTo",
+                            "props":  {"oid": grp.get("oid"),
+                                       "group_name": grp["group"]["name"]
+                                                    if isinstance(grp.get("group"), dict)
+                                                    else grp.get("group")},
+                        })
+            elif attack.startswith("AD CS ESC15") or "EKUwu" in attack:
+                if data.get("template_dn"):
+                    self._extra_edges.append({
+                        "source": data["template_dn"],
+                        "target": self.domain_sid or self.domain,
+                        "edge":   "KerbMapEsc15",
+                        "props":  {"schema_version": data.get("schema_version")},
+                    })
+            # ── Pre-Win2k (PreWin2kAccess module) ───────────────
+            elif attack.startswith("Pre-Win2k membership") and data.get("member_sid"):
+                self._extra_edges.append({
+                    "source": data["member_sid"],
+                    "target": "S-1-5-32-554",   # well-known BUILTIN group SID
+                    "edge":   "KerbMapPreWin2kMember",
+                    "props":  {"member_name": data.get("member_name")},
+                })
+            elif attack == "Anonymous LDAP binds enabled with permissive Pre-Win2k":
+                # Compound finding — attach to the domain so it shows
+                # as a domain-level critical in the graph.
+                self._extra_edges.append({
+                    "source": "S-1-5-32-554",
+                    "target": self.domain_sid or self.domain,
+                    "edge":   "KerbMapAnonymousLdapEnabled",
+                    "props":  {"ds_heuristics": data.get("ds_heuristics")},
+                })
+            # ── Golden dMSA prereq (GmsaKdsAudit module) ────────
+            elif attack.startswith("Golden dMSA prerequisite"):
+                # One edge per extra reader so each reader is queryable
+                # individually — Cypher: MATCH (p)-[:KerbMapKdsReadable]->(k)
+                for sid in data.get("extra_reader_sids", []):
+                    self._extra_edges.append({
+                        "source": sid,
+                        "target": data.get("kds_key_cn") or "kds-root",
+                        "edge":   "KerbMapKdsReadable",
+                        "props":  {},
+                    })
+            elif attack == "gMSA password readable by non-default principal":
+                for sid in data.get("extra_reader_sids", []):
+                    self._extra_edges.append({
+                        "source": sid,
+                        "target": target,            # the gMSA's sAMAccountName
+                        "edge":   "KerbMapGmsaReader",
+                        "props":  {},
+                    })
 
     # ------------------------------------------------------------------ #
     #  Collection → zip                                                  #
