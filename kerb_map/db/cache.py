@@ -89,15 +89,55 @@ class Cache:
                 )
         return scan_id
 
-    def list_scans(self, domain: str | None = None):
-        q    = "SELECT id, domain, dc_ip, operator, timestamp, duration_s FROM scans"
-        args = ()
+    def list_scans(self, domain: str | None = None) -> list[dict]:
+        """Return one dict per stored scan, including a per-severity
+        finding count (brief §3.4). One SQL aggregate so we don't N+1
+        on the row count.
+
+        Each dict:
+          id, domain, dc_ip, operator, timestamp, duration_s,
+          counts: {CRITICAL, HIGH, MEDIUM, LOW, INFO, total}
+        """
+        q = """
+            SELECT
+                s.id, s.domain, s.dc_ip, s.operator, s.timestamp, s.duration_s,
+                COALESCE(SUM(CASE WHEN f.severity = 'CRITICAL' THEN 1 ELSE 0 END), 0) AS c_crit,
+                COALESCE(SUM(CASE WHEN f.severity = 'HIGH'     THEN 1 ELSE 0 END), 0) AS c_high,
+                COALESCE(SUM(CASE WHEN f.severity = 'MEDIUM'   THEN 1 ELSE 0 END), 0) AS c_med,
+                COALESCE(SUM(CASE WHEN f.severity = 'LOW'      THEN 1 ELSE 0 END), 0) AS c_low,
+                COALESCE(SUM(CASE WHEN f.severity = 'INFO'     THEN 1 ELSE 0 END), 0) AS c_info,
+                COALESCE(COUNT(f.id), 0) AS c_total
+            FROM scans s
+            LEFT JOIN findings f ON f.scan_id = s.id
+        """
+        args: tuple = ()
         if domain:
-            q   += " WHERE domain = ?"
+            q   += " WHERE s.domain = ? "
             args = (domain,)
-        q += " ORDER BY timestamp DESC"
+        q += " GROUP BY s.id ORDER BY s.timestamp DESC"
+
         with sqlite3.connect(self.db_path) as conn:
-            return conn.execute(q, args).fetchall()
+            rows = conn.execute(q, args).fetchall()
+
+        return [
+            {
+                "id":         r[0],
+                "domain":     r[1],
+                "dc_ip":      r[2],
+                "operator":   r[3],
+                "timestamp":  r[4],
+                "duration_s": r[5],
+                "counts": {
+                    "CRITICAL": r[6],
+                    "HIGH":     r[7],
+                    "MEDIUM":   r[8],
+                    "LOW":      r[9],
+                    "INFO":     r[10],
+                    "total":    r[11],
+                },
+            }
+            for r in rows
+        ]
 
     def get_scan(self, scan_id: int) -> dict | None:
         with sqlite3.connect(self.db_path) as conn:

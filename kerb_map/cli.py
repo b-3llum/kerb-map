@@ -222,11 +222,36 @@ def cmd_list_scans():
         return
     console.print("\n[bold cyan]Stored Scans[/bold cyan]")
     for r in rows:
-        console.print(
-            f"  [cyan]ID {r[0]:>3}[/cyan]  {r[1]:<25}  DC: {r[2]:<16}  "
-            f"Operator: {r[3] or 'unknown':<15}  {r[4]}"
-        )
+        console.print(_format_list_scans_row(r))
     console.print()
+
+
+def _format_list_scans_row(r: dict) -> str:
+    """One-line summary per scan (brief §3.4). Format:
+      ID  N  domain  DC: ip  operator  short-ts  N findings (NC/NH/NM/NL/NI)  Xs
+    """
+    ts = r.get("timestamp") or ""
+    short_ts = ts.replace("T", " ").split(".", 1)[0]   # 2026-04-25 10:30:00
+    counts   = r.get("counts") or {}
+    total    = counts.get("total", 0)
+    breakdown = (
+        f"{counts.get('CRITICAL', 0)}C/"
+        f"{counts.get('HIGH', 0)}H/"
+        f"{counts.get('MEDIUM', 0)}M/"
+        f"{counts.get('LOW', 0)}L/"
+        f"{counts.get('INFO', 0)}I"
+    )
+    duration = r.get("duration_s") or 0.0
+    return (
+        f"  [cyan]ID {r['id']:>3}[/cyan]  "
+        f"{(r.get('domain') or '?'):<25}  "
+        f"DC: {(r.get('dc_ip') or '?'):<16}  "
+        f"{(r.get('operator') or 'unknown'):<15}  "
+        f"{short_ts:<19}  "
+        f"[bold]{total:>3} findings[/bold] "
+        f"[dim]({breakdown})[/dim]  "
+        f"[dim]{duration:>5.1f}s[/dim]"
+    )
 
 
 def cmd_diff(a_id: int, b_id: int):
