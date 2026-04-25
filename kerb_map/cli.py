@@ -170,6 +170,18 @@ Examples:
                      help="Number of priority targets to display (default: 15)")
     out.add_argument("--no-cache", action="store_true",
                      help="Do not save results to local SQLite cache")
+    # Verbosity (brief §3.1) and colour (brief §3.9). -v/-vv stack;
+    # --quiet silences INFO/SUCCESS/SECTION but always shows WARN+.
+    out.add_argument("-v", "--verbose", action="count", default=0,
+                     help="Increase verbosity. -v adds debug-level "
+                          "operator messages; -vv adds raw LDAP filter "
+                          "logging (the wire view).")
+    out.add_argument("-q", "--quiet", action="store_true",
+                     help="Suppress INFO / SUCCESS / SECTION; only WARN, "
+                          "ERROR, CRITICAL are shown. For cron / log capture.")
+    out.add_argument("--no-color", action="store_true",
+                     help="Disable ANSI colour. Needed for `tee logfile.txt` — "
+                          "rich auto-detects TTYs and emits escapes otherwise.")
 
     # ── Tuning ────────────────────────────────────────────────────
     tune = p.add_argument_group("Tuning")
@@ -705,6 +717,19 @@ def run_scan(args):
 def main():
     parser = build_parser()
     args   = parser.parse_args()
+
+    # Apply verbosity (§3.1) + color (§3.9) before any log call so even
+    # the maintenance sub-commands respect the operator's preference.
+    from kerb_map.output.logger import Level
+    if args.quiet:
+        level = Level.QUIET
+    elif args.verbose >= 2:
+        level = Level.VVERBOSE
+    elif args.verbose == 1:
+        level = Level.VERBOSE
+    else:
+        level = Level.NORMAL
+    log.configure(level=level, color=not args.no_color)
 
     # Maintenance operations
     if args.update:

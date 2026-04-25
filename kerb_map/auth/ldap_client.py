@@ -16,7 +16,11 @@ from ldap3 import ALL, KERBEROS, NTLM, SASL, SUBTREE, Connection, Server, Tls
 from ldap3.core.exceptions import LDAPBindError, LDAPException, LDAPSocketOpenError
 from rich.console import Console
 
+from kerb_map.output.logger import Logger, register_console
+
 console = Console()
+register_console(console)
+log = Logger()
 
 
 # Transport modes, in default fallback order.
@@ -215,6 +219,15 @@ class LDAPClient:
 
         base = search_base or self.base_dn
         self._query_count += 1
+
+        # Wire view (-vv) — log the raw filter + base + attributes the
+        # caller is putting on the wire. Guard with is_trace() so the
+        # f-string isn't built when nobody's listening.
+        if log.is_trace():
+            attrs_short = ",".join(attributes[:6]) + (
+                f"…(+{len(attributes) - 6})" if len(attributes) > 6 else ""
+            )
+            log.trace(f"LDAP search base={base!r} filter={search_filter!r} attrs=[{attrs_short}]")
 
         collected: list = []
         cookie = None
