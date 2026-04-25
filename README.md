@@ -103,16 +103,30 @@ sudo ln -s ~/kerb-map/kerb-map.py /usr/local/bin/kerb-map
 ### Authentication
 
 ```bash
-# Password
+# Password (interactive prompt — recommended on shared hosts)
+kerb-map -d corp.local -dc 192.168.1.10 -u jsmith -p
+
+# Password from stdin (avoids ps aux / shell history exposure)
+kerb-map -d corp.local -dc 192.168.1.10 -u jsmith --password-stdin <<< 'Password123'
+
+# Password from environment variable
+export KERB_PW='Password123'
+kerb-map -d corp.local -dc 192.168.1.10 -u jsmith --password-env KERB_PW
+
+# Password on the command line (legacy — leaks via ps aux on shared hosts)
 kerb-map -d corp.local -dc 192.168.1.10 -u jsmith -p Password123
 
-# Pass-the-Hash (LM:NT or NT only)
+# Pass-the-Hash (LM:NT or NT only) — same -H / --hash-stdin / --hash-env options
 kerb-map -d corp.local -dc 192.168.1.10 -u jsmith -H <NT_HASH>
 
 # Kerberos ccache
 export KRB5CCNAME=/tmp/jsmith.ccache
 kerb-map -d corp.local -dc 192.168.1.10 -u jsmith -k
 ```
+
+> **Avoid `-p Password123` on shared hosts.** The full command line is visible
+> in `ps aux`, shell history (`~/.bash_history`), and audit logs. Use
+> `--password-stdin`, `--password-env`, or omit the value to be prompted.
 
 ### Common Examples
 
