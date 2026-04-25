@@ -28,11 +28,19 @@ def load_findings(path: str | Path) -> list[dict[str, Any]]:
     if isinstance(raw, list):
         return raw
     if isinstance(raw, dict):
+        items = None
         if "targets" in raw:
-            return list(raw["targets"])
-        # Some operators paste just the findings array; tolerate it.
-        if "findings" in raw:
-            return list(raw["findings"])
+            items = list(raw["targets"])
+        elif "findings" in raw:
+            items = list(raw["findings"])
+        if items is not None:
+            # Stash the document's top-level meta block (domain, dc_ip, etc.)
+            # into the first finding under __meta__ so Engagement.from_findings
+            # can pick it up without an extra channel. Mirrors the Rust loader.
+            meta = raw.get("meta")
+            if meta and items and isinstance(items[0], dict):
+                items[0] = {**items[0], "__meta__": meta}
+            return items
     raise ValueError(
         f"{p}: unrecognised kerb-map JSON shape — expected an object with "
         f"a 'targets' or 'findings' key, or a bare list of findings."

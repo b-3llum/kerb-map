@@ -31,7 +31,14 @@ def test_load_findings_handles_full_data_shape(tmp_path):
         "meta": {"domain": "corp.local"},
         "targets": [{"target": "svc_sql", "attack": "Kerberoast"}],
     }))
-    assert load_findings(p) == [{"target": "svc_sql", "attack": "Kerberoast"}]
+    findings = load_findings(p)
+    assert len(findings) == 1
+    # The top-level meta block is stashed onto the first finding under
+    # __meta__ so Engagement.from_findings can resolve domain / dc_ip
+    # without an out-of-band channel. (Same contract on the Rust side.)
+    assert findings[0]["target"] == "svc_sql"
+    assert findings[0]["attack"] == "Kerberoast"
+    assert findings[0]["__meta__"] == {"domain": "corp.local"}
 
 
 def test_load_findings_handles_bare_list(tmp_path):
