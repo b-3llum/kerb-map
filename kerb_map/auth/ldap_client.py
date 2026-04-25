@@ -3,16 +3,12 @@ Core LDAP client — handles all auth methods and exposes a clean query interfac
 Supports: password, NTLM hash (PtH), Kerberos ccache.
 """
 
+import random
 import ssl
 import time
-import random
-from typing import Optional, List
 
-from ldap3 import (
-    Server, Connection, ALL, NTLM, SASL, KERBEROS,
-    SUBTREE, Tls
-)
-from ldap3.core.exceptions import LDAPException, LDAPBindError, LDAPSocketOpenError
+from ldap3 import ALL, KERBEROS, NTLM, SASL, SUBTREE, Connection, Server, Tls
+from ldap3.core.exceptions import LDAPBindError, LDAPException, LDAPSocketOpenError
 from rich.console import Console
 
 console = Console()
@@ -28,8 +24,8 @@ class LDAPClient:
         dc_ip:        str,
         domain:       str,
         username:     str,
-        password:     Optional[str] = None,
-        hashes:       Optional[str] = None,
+        password:     str | None = None,
+        hashes:       str | None = None,
         use_kerberos: bool = False,
         use_ssl:      bool = False,
         stealth:      bool = False,
@@ -89,11 +85,11 @@ class LDAPClient:
             return conn
 
         except LDAPBindError as e:
-            raise LDAPAuthError(f"Authentication failed: {e}")
+            raise LDAPAuthError(f"Authentication failed: {e}") from e
         except LDAPSocketOpenError as e:
-            raise LDAPAuthError(f"Cannot reach DC at {self.dc_ip}: {e}")
+            raise LDAPAuthError(f"Cannot reach DC at {self.dc_ip}: {e}") from e
         except Exception as e:
-            raise LDAPAuthError(f"LDAP connection error: {e}")
+            raise LDAPAuthError(f"LDAP connection error: {e}") from e
 
     @staticmethod
     def _split_hash(hashes: str):
@@ -111,8 +107,8 @@ class LDAPClient:
     def query(
         self,
         search_filter: str,
-        attributes:    List[str],
-        search_base:   Optional[str] = None,
+        attributes:    list[str],
+        search_base:   str | None = None,
         size_limit:    int = 0,
     ):
         """Core query — stealth mode injects random jitter between calls."""
@@ -135,7 +131,7 @@ class LDAPClient:
             console.print(f"[yellow][!] LDAP query failed ({search_filter[:50]}): {e}[/yellow]")
             return []
 
-    def query_config(self, search_filter: str, attributes: List[str]):
+    def query_config(self, search_filter: str, attributes: list[str]):
         """Query the Configuration naming context — needed for AD CS, schema."""
         config_base = f"CN=Configuration,{self.base_dn}"
         return self.query(search_filter, attributes, search_base=config_base)
@@ -200,8 +196,10 @@ class LDAPClient:
         if self.conn:
             try:
                 self.conn.unbind()
-            except Exception:
-                pass
+            except Exception as e:
+                # Swallowed because close() is best-effort during cleanup, but
+                # surface at debug so an operator can still see what happened.
+                console.print(f"[dim]LDAP unbind on close() raised: {e}[/dim]")
 
     @staticmethod
     def _to_base_dn(domain: str) -> str:

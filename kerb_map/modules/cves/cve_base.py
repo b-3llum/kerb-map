@@ -6,7 +6,7 @@ Every check returns a standardised CVEResult dataclass.
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Dict, Any, List
+from typing import Any
 
 
 class Severity(Enum):
@@ -33,13 +33,13 @@ class CVEResult:
     severity:    Severity
     vulnerable:  bool
     reason:      str
-    evidence:    Dict[str, Any]
+    evidence:    dict[str, Any]
     remediation: str
     next_step:   str
     noise_level: str  = "LOW"   # LOW / MEDIUM / HIGH
-    references:  List[str] = field(default_factory=list)  # Fix: was missing, caused unexpected kwarg crash
+    references:  list[str] = field(default_factory=list)  # Fix: was missing, caused unexpected kwarg crash
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """Fix: callers in cli.py call r.to_dict() — dataclass has no such method by default."""
         return {
             "cve_id":      self.cve_id,

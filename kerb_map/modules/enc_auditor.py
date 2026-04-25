@@ -4,8 +4,6 @@ RC4 (arcfour-hmac) support on DCs and service accounts = faster offline cracking
 """
 
 from dataclasses import dataclass, field
-from typing import List
-
 
 ENC_TYPES = {
     0x1:  "DES-CBC-CRC",
@@ -20,7 +18,7 @@ ENC_TYPES = {
 @dataclass
 class WeakEncAccount:
     account:   str
-    enc_types: List[str]
+    enc_types: list[str]
     rc4_only:  bool
     is_dc:     bool
     risk:      str
@@ -28,9 +26,9 @@ class WeakEncAccount:
 
 @dataclass
 class EncAuditResults:
-    rc4_only_accounts:    List[WeakEncAccount] = field(default_factory=list)
-    des_accounts:         List[WeakEncAccount] = field(default_factory=list)
-    weak_dcs:             List[WeakEncAccount] = field(default_factory=list)
+    rc4_only_accounts:    list[WeakEncAccount] = field(default_factory=list)
+    des_accounts:         list[WeakEncAccount] = field(default_factory=list)
+    weak_dcs:             list[WeakEncAccount] = field(default_factory=list)
     domain_default_rc4:   bool                 = False
 
 
@@ -94,7 +92,7 @@ class EncAuditor:
         return results
 
     @staticmethod
-    def _parse_enc(enc: int) -> List[str]:
+    def _parse_enc(enc: int) -> list[str]:
         if enc == 0:
             return ["RC4-HMAC (default — no explicit AES restriction)"]
         return [

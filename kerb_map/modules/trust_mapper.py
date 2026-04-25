@@ -3,9 +3,7 @@ Trust Mapper — enumerates all domain trusts and flags dangerous configurations
 Bidirectional trusts and forest trusts with SID filtering disabled are high risk.
 """
 
-from dataclasses import dataclass, field
-from typing import List
-
+from dataclasses import dataclass
 
 TRUST_TYPE = {
     1: "DOWNLEVEL (Windows NT)",
@@ -38,7 +36,7 @@ class DomainTrust:
     trust_partner:   str
     direction:       str
     trust_type:      str
-    attributes:      List[str]
+    attributes:      list[str]
     sid_filtering:   bool
     is_forest_trust: bool
     is_bidirectional:bool
@@ -50,7 +48,7 @@ class TrustMapper:
     def __init__(self, ldap_client):
         self.ldap = ldap_client
 
-    def map(self) -> List[DomainTrust]:
+    def map(self) -> list[DomainTrust]:
         entries = self.ldap.query(
             search_filter="(objectClass=trustedDomain)",
             attributes=[

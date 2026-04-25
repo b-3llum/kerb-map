@@ -17,10 +17,10 @@ Checks performed:
   - Service account password hygiene (SPN accounts with old passwords)
 """
 
-from dataclasses import dataclass, field
-from datetime import datetime, timezone, timedelta
-from typing import Dict, List, Any, Optional
 import re
+from dataclasses import dataclass, field
+from datetime import datetime, timedelta, timezone
+from typing import Any
 
 from kerb_map.output.logger import Logger
 
@@ -64,16 +64,16 @@ DEFAULT_PRIMARY_GROUPS = {
 @dataclass
 class HygieneResult:
     """Container for all hygiene audit findings."""
-    sid_history:         List[Dict] = field(default_factory=list)
-    laps_coverage:       Dict[str, Any] = field(default_factory=dict)
-    krbtgt_age:          Dict[str, Any] = field(default_factory=dict)
-    adminsdholder_orphans: List[Dict] = field(default_factory=list)
-    fgpp_audit:          Dict[str, Any] = field(default_factory=dict)
-    credential_exposure: List[Dict] = field(default_factory=list)
-    primary_group_abuse: List[Dict] = field(default_factory=list)
-    stale_computers:     List[Dict] = field(default_factory=list)
-    privileged_groups:   Dict[str, List[Dict]] = field(default_factory=dict)
-    service_acct_hygiene: List[Dict] = field(default_factory=list)
+    sid_history:         list[dict] = field(default_factory=list)
+    laps_coverage:       dict[str, Any] = field(default_factory=dict)
+    krbtgt_age:          dict[str, Any] = field(default_factory=dict)
+    adminsdholder_orphans: list[dict] = field(default_factory=list)
+    fgpp_audit:          dict[str, Any] = field(default_factory=dict)
+    credential_exposure: list[dict] = field(default_factory=list)
+    primary_group_abuse: list[dict] = field(default_factory=list)
+    stale_computers:     list[dict] = field(default_factory=list)
+    privileged_groups:   dict[str, list[dict]] = field(default_factory=dict)
+    service_acct_hygiene: list[dict] = field(default_factory=list)
 
     def finding_count(self) -> int:
         count = 0
@@ -116,7 +116,7 @@ class HygieneAuditor:
     # SID History Audit
     # ──────────────────────────────────────────────────────────────────────
 
-    def _sid_history_audit(self) -> List[Dict]:
+    def _sid_history_audit(self) -> list[dict]:
         log.info("Checking for SID History attributes...")
         entries = self.ldap.query(
             search_filter="(sIDHistory=*)",
@@ -167,7 +167,7 @@ class HygieneAuditor:
     # LAPS Coverage
     # ──────────────────────────────────────────────────────────────────────
 
-    def _laps_coverage(self) -> Dict[str, Any]:
+    def _laps_coverage(self) -> dict[str, Any]:
         log.info("Calculating LAPS deployment coverage...")
 
         # Total enabled computers (excluding DCs)
@@ -236,7 +236,7 @@ class HygieneAuditor:
     # krbtgt Password Age
     # ──────────────────────────────────────────────────────────────────────
 
-    def _krbtgt_password_age(self) -> Dict[str, Any]:
+    def _krbtgt_password_age(self) -> dict[str, Any]:
         log.info("Checking krbtgt password age...")
         entries = self.ldap.query(
             search_filter="(sAMAccountName=krbtgt)",
@@ -286,7 +286,7 @@ class HygieneAuditor:
     # AdminSDHolder Orphans
     # ──────────────────────────────────────────────────────────────────────
 
-    def _adminsdholder_orphans(self) -> List[Dict]:
+    def _adminsdholder_orphans(self) -> list[dict]:
         log.info("Detecting AdminSDHolder orphan accounts...")
         # Get all accounts with adminCount=1
         admin_entries = self.ldap.query(
@@ -330,7 +330,7 @@ class HygieneAuditor:
     # Fine-Grained Password Policies
     # ──────────────────────────────────────────────────────────────────────
 
-    def _fgpp_audit(self) -> Dict[str, Any]:
+    def _fgpp_audit(self) -> dict[str, Any]:
         log.info("Auditing Fine-Grained Password Policies...")
         entries = self.ldap.query(
             search_filter="(objectClass=msDS-PasswordSettings)",
@@ -393,7 +393,7 @@ class HygieneAuditor:
     # Credential Exposure in Description/Info Fields
     # ──────────────────────────────────────────────────────────────────────
 
-    def _credential_exposure(self) -> List[Dict]:
+    def _credential_exposure(self) -> list[dict]:
         log.info("Scanning for credentials in description/info fields...")
         entries = self.ldap.query(
             search_filter="(&(objectClass=user)(|(description=*pass*)(description=*pwd*)(description=*cred*)(info=*pass*)(info=*pwd*)))",
@@ -428,7 +428,7 @@ class HygieneAuditor:
     # PrimaryGroupId Manipulation
     # ──────────────────────────────────────────────────────────────────────
 
-    def _primary_group_abuse(self) -> List[Dict]:
+    def _primary_group_abuse(self) -> list[dict]:
         log.info("Checking for non-default primaryGroupId values...")
         # Users with non-standard primaryGroupId (not 513 Domain Users)
         entries = self.ldap.query(
@@ -472,7 +472,7 @@ class HygieneAuditor:
     # Stale Computer Accounts
     # ──────────────────────────────────────────────────────────────────────
 
-    def _stale_computers(self) -> List[Dict]:
+    def _stale_computers(self) -> list[dict]:
         log.info("Checking for stale computer accounts...")
         # 90 days ago in Windows FILETIME
         threshold_dt = datetime.now(timezone.utc) - timedelta(days=90)
@@ -524,7 +524,7 @@ class HygieneAuditor:
     # Privileged Group Membership Breakdown
     # ──────────────────────────────────────────────────────────────────────
 
-    def _privileged_group_breakdown(self) -> Dict[str, List[Dict]]:
+    def _privileged_group_breakdown(self) -> dict[str, list[dict]]:
         log.info("Enumerating privileged group memberships...")
         groups_to_check = [
             "Domain Admins", "Enterprise Admins", "Schema Admins",
@@ -577,7 +577,7 @@ class HygieneAuditor:
     # Service Account Password Hygiene
     # ──────────────────────────────────────────────────────────────────────
 
-    def _service_account_hygiene(self) -> List[Dict]:
+    def _service_account_hygiene(self) -> list[dict]:
         log.info("Checking service account password hygiene...")
         # Service accounts = user accounts with SPNs
         entries = self.ldap.query(
@@ -650,7 +650,7 @@ class HygieneAuditor:
     # Helpers
     # ──────────────────────────────────────────────────────────────────────
 
-    def _get_domain_sid(self) -> Optional[str]:
+    def _get_domain_sid(self) -> str | None:
         """Extract the domain SID prefix (e.g. S-1-5-21-xxx-xxx-xxx)."""
         entries = self.ldap.query(
             search_filter="(objectClass=domainDNS)",

@@ -2,12 +2,11 @@
 Scorer — cross-correlates all findings into a unified ranked attack path list.
 """
 
-from typing import List, Dict, Any
 
 
 class Scorer:
     def rank(self, spns, asrep, delegations, cve_results, user_data,
-             enc_audit=None, trusts=None, hygiene=None) -> List[Dict]:
+             enc_audit=None, trusts=None, hygiene=None) -> list[dict]:
         targets = []
 
         for spn in spns:
@@ -188,7 +187,7 @@ class Scorer:
                         "priority": 65 if s["risk"] == "HIGH" else 80,
                         "severity": s["risk"],
                         "reason": s["detail"],
-                        "next_step": f"# Service account with SPN — Kerberoast + credential reuse",
+                        "next_step": "# Service account with SPN — Kerberoast + credential reuse",
                         "category": "hygiene",
                     })
 

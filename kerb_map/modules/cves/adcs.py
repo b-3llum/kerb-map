@@ -2,7 +2,7 @@
 AD CS — ESC1 through ESC4 / ESC8 (passive LDAP detection).
 """
 
-from typing import List, Dict
+
 from kerb_map.modules.cves.cve_base import CVEBase, CVEResult, Severity
 from kerb_map.output.logger import Logger
 
@@ -73,7 +73,7 @@ class ADCSAudit(CVEBase):
                         "pKIExtendedKeyUsage","msPKI-RA-Signature"],
         )
 
-    def _analyze(self, templates) -> List[Dict]:
+    def _analyze(self, templates) -> list[dict]:
         findings = []
         for t in templates:
             name      = str(t["cn"])

@@ -10,7 +10,7 @@ from kerb_map.output.logger import Logger
 log = Logger()
 
 try:
-    from impacket.dcerpc.v5 import transport, rprn
+    from impacket.dcerpc.v5 import rprn, transport
     IMPACKET_OK = True
 except ImportError:
     IMPACKET_OK = False
