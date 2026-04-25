@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "kerb-map"
-version = "1.1.0"
-description = "Active Directory Kerberos Attack Surface Mapper"
+version = "2.0.0"
+description = "Active Directory Kerberos Attack Surface Mapper + chain orchestrator"
 readme = "README.md"
 license = {text = "MIT"}
 requires-python = ">=3.10"
@@ -31,6 +31,7 @@ dependencies = [
     "ldap3>=2.9.1",
     "impacket>=0.11.0",
     "rich>=13.0.0",
+    "PyYAML>=6.0",
 ]
 
 [project.optional-dependencies]
@@ -45,10 +46,14 @@ Issues = "https://github.com/b-3llum/kerb-map/issues"
 Changelog = "https://github.com/b-3llum/kerb-map/blob/main/CHANGELOG.md"
 
 [project.scripts]
-kerb-map = "kerb_map.main:main"
+kerb-map   = "kerb_map.main:main"
+kerb-chain = "kerb_chain.cli:main"
 
 [tool.setuptools.packages.find]
-include = ["kerb_map*"]
+include = ["kerb_map*", "kerb_chain*"]
+
+[tool.setuptools.package-data]
+kerb_chain = ["playbooks/*.yaml"]
 
 [tool.ruff]
 line-length = 110
