@@ -8,7 +8,10 @@ from rich import box
 from rich.console import Console
 from rich.table import Table
 
+from kerb_map.output.logger import register_console
+
 console = Console()
+register_console(console)
 
 SEV_COLOR = {
     "CRITICAL": "bold white on red",
