@@ -58,9 +58,39 @@ from kerb_map.output.reporter import (
     print_user_results,
 )
 from kerb_map.plugin import ScanContext, all_modules, discover
+from kerb_map.resume import ResumeState, list_resumable
 from kerb_map.substitute import SubstitutionContext, apply_to_findings, substitute
 
 log = Logger()
+
+
+def _finding_from_dict(d: dict):
+    """Reconstruct a Finding-shaped object from its dict form (for resume).
+    Returned as a plain SimpleNamespace — downstream code only reads
+    .severity / .priority / .attack / .target / .reason / .next_step / .data,
+    so we don't need the full Finding dataclass."""
+    from types import SimpleNamespace
+    return SimpleNamespace(**{
+        "target":    d.get("target", ""),
+        "attack":    d.get("attack", ""),
+        "severity":  d.get("severity", "INFO"),
+        "priority":  d.get("priority", 0),
+        "reason":    d.get("reason", ""),
+        "next_step": d.get("next_step", ""),
+        "category":  d.get("category", ""),
+        "mitre":     d.get("mitre", ""),
+        "data":      d.get("data", {}),
+        "as_dict":   lambda d=d: d,
+    })
+
+
+def _cve_from_dict(d: dict):
+    """Reconstruct a CVEResult from its dict form. Same SimpleNamespace
+    trick — print_cve_results / scorer only read the documented fields."""
+    from types import SimpleNamespace
+    ns = SimpleNamespace(**d)
+    ns.to_dict = lambda d=d: d
+    return ns
 
 # Marker placed in args.password / args.hash by argparse when the flag
 # was given without a value — meaning "prompt me interactively".
@@ -234,6 +264,19 @@ Examples:
                     help="Diff two scans by ID — prints REMOVED (fixed) / "
                          "ADDED (new) / UNCHANGED (still exposed) buckets. "
                          "The high-value retest feature.")
+
+    # ── Resume (brief §3.8) ─────────────────────────────────────
+    resume = p.add_argument_group("Partial scan / resume")
+    resume.add_argument("--resume", metavar="ID",
+                        help="Continue a previously-interrupted scan. "
+                             "Pass the full scan-id or a unique prefix "
+                             "(see --list-resumable). CVE checks and v2 "
+                             "plugin modules already done in the prior "
+                             "run are skipped.")
+    resume.add_argument("--list-resumable", action="store_true",
+                        help="List in-progress scans that can be resumed "
+                             "and exit. Shows scan-id, domain, started_at, "
+                             "and which modules have completed.")
 
     # ── Maintenance ─────────────────────────────────────────────
     maint = p.add_argument_group("Maintenance")
@@ -617,6 +660,27 @@ def run_scan(args):
         base_dn=ldap.base_dn,
     )
 
+    # Resume / partial-scan state (brief §3.8). On --resume, load prior
+    # state from disk; otherwise start fresh and announce the scan-id
+    # so the operator can resume if the run gets interrupted.
+    if args.resume:
+        resume_state = ResumeState.load(args.resume)
+        if resume_state is None:
+            log.error(f"No resumable scan matches '{args.resume}'. "
+                      f"Use --list-resumable to see candidates.")
+            sys.exit(1)
+        log.info(
+            f"Resuming scan {resume_state.scan_id} "
+            f"({resume_state.domain}, started {resume_state.started_at}). "
+            f"Skipping modules: {', '.join(resume_state.completed) or '(none)'}"
+        )
+    else:
+        resume_state = ResumeState.new(domain=args.domain)
+        log.info(
+            f"Scan id: [cyan]{resume_state.scan_id}[/cyan] — "
+            f"resume with --resume {resume_state.scan_id} if interrupted"
+        )
+
     # ── Kerberoastable accounts ───────────────────────────────────
     spns = []
     if run_spn:
@@ -662,18 +726,23 @@ def run_scan(args):
     # ── CVE Checks ────────────────────────────────────────────────
     cve_results = []
     if run_cve:
-        log.section("CVE & Misconfiguration Checks")
-        if args.aggressive:
-            log.warn("Aggressive mode ON — RPC probes will generate Windows Event 5145")
-        only_cves = None
-        if args.only_cves:
-            only_cves = {x.strip() for x in args.only_cves.split(",") if x.strip()}
-        cve_results = CVEScanner(ldap, args.dc_ip, args.domain).run(
-            aggressive=args.aggressive,
-            only=only_cves,
-        )
-        apply_to_findings(cve_results, sub_ctx)
-        print_cve_results(cve_results)
+        if resume_state.is_done("cves"):
+            log.info("CVE checks already done — restoring from resumed state")
+            cve_results = [_cve_from_dict(d) for d in resume_state.findings_for("cves")]
+        else:
+            log.section("CVE & Misconfiguration Checks")
+            if args.aggressive:
+                log.warn("Aggressive mode ON — RPC probes will generate Windows Event 5145")
+            only_cves = None
+            if args.only_cves:
+                only_cves = {x.strip() for x in args.only_cves.split(",") if x.strip()}
+            cve_results = CVEScanner(ldap, args.dc_ip, args.domain).run(
+                aggressive=args.aggressive,
+                only=only_cves,
+            )
+            apply_to_findings(cve_results, sub_ctx)
+            print_cve_results(cve_results)
+            resume_state.record("cves", findings=cve_results)
 
     # ── Hygiene Audit ────────────────────────────────────────────
     hygiene = None
@@ -696,6 +765,13 @@ def run_scan(args):
         for cls in all_modules():
             if cls.requires_aggressive and not args.aggressive:
                 continue
+            resume_key = f"v2:{cls.flag}"
+            if resume_state.is_done(resume_key):
+                cached = resume_state.findings_for(resume_key)
+                log.info(f"v2: {cls.name} — resumed ({len(cached)} findings)")
+                v2_findings.extend(_finding_from_dict(d) for d in cached)
+                v2_results[cls.flag] = resume_state.raw.get(resume_key, {})
+                continue
             log.section(f"v2: {cls.name}")
             try:
                 result = cls().scan(ctx)
@@ -705,6 +781,9 @@ def run_scan(args):
             v2_results[cls.flag] = result.raw if result.raw is not None else {}
             apply_to_findings(result.findings, sub_ctx)
             v2_findings.extend(result.findings)
+            resume_state.record(resume_key,
+                                findings=result.findings,
+                                raw=v2_results[cls.flag])
             for f in result.findings:
                 sev_col = {"CRITICAL": "red", "HIGH": "red", "MEDIUM": "yellow",
                            "LOW": "green", "INFO": "dim"}.get(f.severity, "white")
@@ -793,6 +872,12 @@ def run_scan(args):
         except Exception as e:
             log.warn(f"Cache write failed: {e}")
 
+    # Scan finished cleanly — drop the partial-state file (brief §3.8).
+    # If anything above raised, the file stays so the operator can
+    # resume; the success path discards it because the SQLite cache now
+    # holds the canonical record.
+    resume_state.discard()
+
     # ── File export ───────────────────────────────────────────────
     if args.output:
         ts  = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -863,6 +948,10 @@ def main():
 
     if args.list_cves:
         cmd_list_cves()
+        return
+
+    if args.list_resumable:
+        cmd_list_resumable()
         return
 
     if args.spray:
@@ -993,6 +1082,26 @@ def cmd_spray(args):
     log.success(
         f"{len(result.hits)} hit(s) in {result.attempts} attempts. "
         f"Use the SAM:password pairs above as your initial foothold."
+    )
+
+
+def cmd_list_resumable():
+    rows = list_resumable()
+    if not rows:
+        log.warn("No in-progress scans on disk.")
+        log.info("In-progress state lives in ~/.kerb-map/in_progress/")
+        return
+    console.print("\n[bold cyan]Resumable Scans[/bold cyan]")
+    for r in rows:
+        console.print(
+            f"  [cyan]{r['scan_id']}[/cyan]  {r['domain']:<25}  "
+            f"started {r['started_at']}  "
+            f"[dim]{len(r['modules'])} modules done · "
+            f"{r['findings']} findings[/dim]"
+        )
+    console.print(
+        "\n[dim]Resume with: kerb-map -d <domain> -dc <ip> -u <user> "
+        "-p <pass> --resume <scan_id>[/dim]\n"
     )
 
 
