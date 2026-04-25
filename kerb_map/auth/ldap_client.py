@@ -204,6 +204,7 @@ class LDAPClient:
         search_base:   str | None = None,
         size_limit:    int = 0,
         page_size:     int = 1000,
+        controls:      list | None = None,
     ):
         """Core query. Pages results past the server's MaxPageSize so large
         domains are not silently truncated. Returns a flat list of
@@ -227,6 +228,7 @@ class LDAPClient:
                     size_limit=size_limit,
                     paged_size=page_size,
                     paged_cookie=cookie,
+                    controls=controls,
                 )
                 collected.extend(self.conn.entries)
 
