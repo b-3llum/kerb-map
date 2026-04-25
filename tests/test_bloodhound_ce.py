@@ -411,3 +411,74 @@ def test_gmsa_reader_finding_emits_one_edge_per_reader(tmp_path):
     assert edges[0]["edge"] == "KerbMapGmsaReader"
     assert edges[0]["source"] == "S-1-5-21-10-20-30-1700"
     assert edges[0]["target"] == "gmsa_app$"
+
+
+# ─────────────────────── Tier-0 ACL audit findings → KerbMapWriteAcl ────
+
+
+def test_tier0_acl_finding_emits_kerbmap_writeacl_edge(tmp_path):
+    """Per-right edge labels so a CRTE-style 'find every writer of
+    Domain Admins' query is one Cypher hop."""
+    exp = _exporter()
+    exp.add_findings([Finding(
+        target="Domain Admins",
+        attack="Tier-0 ACL: GenericAll on Privileged group",
+        severity="CRITICAL", priority=95, reason="...",
+        data={
+            "writer_sid":  "S-1-5-21-10-20-30-1500",
+            "writer_sam":  "rogue_user",
+            "writer_dn":   "CN=rogue_user,...",
+            "target_dn":   "CN=Domain Admins,CN=Users,DC=corp,DC=local",
+            "target_sid":  "S-1-5-21-10-20-30-512",
+            "target_kind": "Privileged group",
+            "right":       "GenericAll",
+        },
+    )])
+    out = exp.export(str(tmp_path / "tier0.zip"))
+    edges = _read_edges(out)
+    assert len(edges) == 1
+    edge = edges[0]
+    assert edge["edge"]   == "KerbMapWriteAcl"
+    assert edge["source"] == "S-1-5-21-10-20-30-1500"
+    assert edge["target"] == "S-1-5-21-10-20-30-512"
+    assert edge["props"]["right"]       == "GenericAll"
+    assert edge["props"]["target_kind"] == "Privileged group"
+
+
+def test_tier0_acl_finding_uses_target_dn_when_no_sid(tmp_path):
+    """AdminSDHolder doesn't have a useful SID — the edge attaches to
+    the DN instead. Operators can resolve in BH via name match."""
+    exp = _exporter()
+    exp.add_findings([Finding(
+        target="AdminSDHolder",
+        attack="Tier-0 ACL: WriteDACL on AdminSDHolder",
+        severity="CRITICAL", priority=93, reason="...",
+        data={
+            "writer_sid":  "S-1-5-21-10-20-30-1500",
+            "target_dn":   "CN=AdminSDHolder,CN=System,DC=corp,DC=local",
+            "target_sid":  None,
+            "target_kind": "AdminSDHolder",
+            "right":       "WriteDACL",
+        },
+    )])
+    out = exp.export(str(tmp_path / "adminsd.zip"))
+    edges = _read_edges(out)
+    assert len(edges) == 1
+    assert edges[0]["target"].startswith("CN=AdminSDHolder")
+
+
+def test_tier0_acl_finding_without_writer_sid_skipped(tmp_path):
+    """Defensive: a Tier-0 finding with no writer_sid (shouldn't
+    happen — the module always sets it — but the BH integration
+    survives the corruption gracefully)."""
+    exp = _exporter()
+    exp.add_findings([Finding(
+        target="Domain Admins",
+        attack="Tier-0 ACL: GenericAll on Privileged group",
+        severity="CRITICAL", priority=95, reason="...",
+        data={"target_dn": "CN=Domain Admins,...", "right": "GenericAll"},
+    )])
+    out = exp.export(str(tmp_path / "broken.zip"))
+    with zipfile.ZipFile(out) as zf:
+        # No edges file — the broken finding was skipped silently.
+        assert "kerbmap_edges.json" not in zf.namelist()

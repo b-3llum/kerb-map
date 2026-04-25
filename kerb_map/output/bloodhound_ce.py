@@ -200,6 +200,23 @@ class BloodHoundCEExporter:
                         "edge":   "KerbMapGmsaReader",
                         "props":  {},
                     })
+            # ── Tier-0 ACL audit (Tier0AclAudit module) ─────────
+            #
+            # Right-specific edge labels so a CRTE-style "find every
+            # writer of Domain Admins" query is one Cypher hop:
+            #   MATCH (u)-[:KerbMapWriteAcl]->(t {samaccountname:'Domain Admins'})
+            #   RETURN u, t.right
+            elif attack.startswith("Tier-0 ACL:") and data.get("writer_sid"):
+                target_id = data.get("target_sid") or data.get("target_dn") or ""
+                self._extra_edges.append({
+                    "source": data["writer_sid"],
+                    "target": target_id,
+                    "edge":   "KerbMapWriteAcl",
+                    "props":  {
+                        "right":       data.get("right"),
+                        "target_kind": data.get("target_kind"),
+                    },
+                })
 
     # ------------------------------------------------------------------ #
     #  Collection → zip                                                  #
