@@ -1,6 +1,11 @@
 """
 Core LDAP client — handles all auth methods and exposes a clean query interface.
 Supports: password, NTLM hash (PtH), Kerberos ccache.
+
+Transport: tries LDAPS → StartTLS → (signed SASL, if Kerberos) → plain LDAP
+unless a specific transport is pinned via the ``transport`` argument.
+Hardened DCs (``ldap server require strong auth = yes``) refuse the plain
+389 bind, so the auto-fallback chain prevents an immediate hard fail.
 """
 
 import random
@@ -12,6 +17,15 @@ from ldap3.core.exceptions import LDAPBindError, LDAPException, LDAPSocketOpenEr
 from rich.console import Console
 
 console = Console()
+
+
+# Transport modes, in default fallback order.
+TRANSPORT_LDAPS    = "ldaps"     # LDAPS on 636 (TLS from the start)
+TRANSPORT_STARTTLS = "starttls"  # plain 389 → StartTLS upgrade → bind
+TRANSPORT_SIGNED   = "signed"    # SASL/GSS-API (Kerberos only) — channel signed
+TRANSPORT_PLAIN    = "plain"     # plain 389, simple/NTLM bind — last resort
+
+_DEFAULT_CHAIN = (TRANSPORT_LDAPS, TRANSPORT_STARTTLS, TRANSPORT_SIGNED, TRANSPORT_PLAIN)
 
 
 class LDAPAuthError(Exception):
@@ -27,69 +41,143 @@ class LDAPClient:
         password:     str | None = None,
         hashes:       str | None = None,
         use_kerberos: bool = False,
-        use_ssl:      bool = False,
+        use_ssl:      bool = False,           # kept for back-compat
+        transport:    str | None = None,      # one of TRANSPORT_*; None = auto
         stealth:      bool = False,
         timeout:      int  = 10,
     ):
-        self.dc_ip        = dc_ip
-        self.domain       = domain
-        self.username     = username
-        self.base_dn      = self._to_base_dn(domain)
-        self.stealth      = stealth
-        self.timeout      = timeout
-        self._query_count = 0
-        self.conn         = self._connect(username, password, hashes, use_kerberos, use_ssl)
+        self.dc_ip          = dc_ip
+        self.domain         = domain
+        self.username       = username
+        self.base_dn        = self._to_base_dn(domain)
+        self.stealth        = stealth
+        self.timeout        = timeout
+        self.transport_used: str | None = None
+        self._query_count   = 0
+
+        if use_ssl and transport is None:
+            transport = TRANSPORT_LDAPS  # honour legacy use_ssl=True callers
+
+        self.conn = self._connect(username, password, hashes, use_kerberos, transport)
 
     # ------------------------------------------------------------------ #
     #  Connection                                                          #
     # ------------------------------------------------------------------ #
 
-    def _connect(self, username, password, hashes, use_kerberos, use_ssl):
-        try:
-            tls = Tls(validate=ssl.CERT_NONE) if use_ssl else None
-            server = Server(
-                self.dc_ip,
-                port=636 if use_ssl else 389,
-                use_ssl=use_ssl,
-                tls=tls,
-                get_info=ALL,
-                connect_timeout=self.timeout,
+    def _connect(self, username, password, hashes, use_kerberos, transport):
+        if transport is not None:
+            chain = (transport,)
+        else:
+            chain = tuple(
+                t for t in _DEFAULT_CHAIN
+                # SASL signing requires a Kerberos cred — skip otherwise.
+                if t != TRANSPORT_SIGNED or use_kerberos
             )
 
-            if use_kerberos:
-                conn = Connection(
-                    server,
-                    authentication=SASL,
-                    sasl_mechanism=KERBEROS,
-                    auto_bind=True,
-                )
-            elif hashes:
-                lm, nt = self._split_hash(hashes)
-                conn = Connection(
-                    server,
-                    user=f"{self.domain}\\{username}",
-                    password=f"{lm}:{nt}",
-                    authentication=NTLM,
-                    auto_bind=True,
-                )
-            else:
-                conn = Connection(
-                    server,
-                    user=f"{self.domain}\\{username}",
-                    password=password,
-                    authentication=NTLM,
-                    auto_bind=True,
-                )
+        errors: list[str] = []
+        for t in chain:
+            try:
+                conn = self._open(t, username, password, hashes, use_kerberos)
+            except LDAPSocketOpenError as e:
+                # Wrong port / no listener — try the next transport.
+                errors.append(f"{t}: {e}")
+                continue
+            except LDAPBindError as e:
+                # If a transport is pinned, surface the bind failure verbatim.
+                if len(chain) == 1:
+                    raise LDAPAuthError(f"Authentication failed ({t}): {e}") from e
+                errors.append(f"{t}: {e}")
+                continue
+            except LDAPException as e:
+                errors.append(f"{t}: {e}")
+                continue
 
-            console.print(f"[green][+] LDAP bind successful — {self.domain}\\{username}[/green]")
+            self.transport_used = t
+            self._announce_bind(t, conn)
             return conn
 
-        except LDAPBindError as e:
-            raise LDAPAuthError(f"Authentication failed: {e}") from e
-        except LDAPSocketOpenError as e:
-            raise LDAPAuthError(f"Cannot reach DC at {self.dc_ip}: {e}") from e
-        except Exception as e:
-            raise LDAPAuthError(f"LDAP connection error: {e}") from e
+        raise LDAPAuthError(
+            "All LDAP transports failed:\n  " + "\n  ".join(errors)
+        )
+
+    def _open(self, transport, username, password, hashes, use_kerberos):
+        """Build, connect, and bind a Connection over the given transport."""
+        if transport == TRANSPORT_LDAPS:
+            port, use_ssl, do_starttls = 636, True, False
+        elif transport == TRANSPORT_STARTTLS:
+            port, use_ssl, do_starttls = 389, False, True
+        elif transport in (TRANSPORT_SIGNED, TRANSPORT_PLAIN):
+            port, use_ssl, do_starttls = 389, False, False
+        else:
+            raise ValueError(f"unknown transport: {transport!r}")
+
+        tls = Tls(validate=ssl.CERT_NONE) if (use_ssl or do_starttls) else None
+        server = Server(
+            self.dc_ip,
+            port=port,
+            use_ssl=use_ssl,
+            tls=tls,
+            get_info=ALL,
+            connect_timeout=self.timeout,
+        )
+
+        if use_kerberos:
+            auth_kwargs = dict(authentication=SASL, sasl_mechanism=KERBEROS)
+        elif hashes:
+            lm, nt = self._split_hash(hashes)
+            auth_kwargs = dict(
+                user=f"{self.domain}\\{username}",
+                password=f"{lm}:{nt}",
+                authentication=NTLM,
+            )
+        else:
+            auth_kwargs = dict(
+                user=f"{self.domain}\\{username}",
+                password=password,
+                authentication=NTLM,
+            )
+
+        if do_starttls:
+            conn = Connection(server, auto_bind=False, **auth_kwargs)
+            if not conn.start_tls():
+                raise LDAPException(
+                    f"StartTLS upgrade refused by {self.dc_ip}: {conn.last_error}"
+                )
+            if not conn.bind():
+                raise LDAPBindError(conn.last_error or "bind failed after StartTLS")
+            return conn
+
+        return Connection(server, auto_bind=True, **auth_kwargs)
+
+    def _announce_bind(self, transport, conn):
+        ident = f"{self.domain}\\{self.username}"
+        if transport in (TRANSPORT_LDAPS, TRANSPORT_STARTTLS):
+            tls_desc = self._describe_tls(conn)
+            label = "LDAPS" if transport == TRANSPORT_LDAPS else "StartTLS"
+            console.print(
+                f"[green][+] {label} bind successful — {tls_desc}[/green]  {ident}"
+            )
+        elif transport == TRANSPORT_SIGNED:
+            console.print(
+                f"[green][+] Signed LDAP bind (SASL/Kerberos) successful[/green]  {ident}"
+            )
+        else:  # plain
+            console.print(
+                f"[yellow][!] Plain LDAP bind on 389 — channel is unencrypted "
+                f"and unsigned[/yellow]  {ident}"
+            )
+
+    def _describe_tls(self, conn):
+        """Best-effort 'TLS 1.3, peer DC01.corp.local' string for the banner."""
+        try:
+            sock = conn.socket
+            ver  = sock.version() if sock and hasattr(sock, "version") else None
+            host = self.dc_ip
+            if ver:
+                return f"{ver}, peer {host}"
+        except Exception:
+            pass
+        return "TLS established"
 
     @staticmethod
     def _split_hash(hashes: str):

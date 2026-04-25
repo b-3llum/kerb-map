@@ -133,6 +133,18 @@ Examples:
     tune.add_argument("--timeout",  type=int, default=10,
                       help="LDAP connection timeout in seconds (default: 10)")
 
+    # ── Transport / TLS ──────────────────────────────────────────
+    # Default behaviour: try LDAPS → StartTLS → (signed if --kerberos) → plain.
+    # Use one of these flags to pin a single transport.
+    tls = p.add_argument_group("Transport (mutually exclusive — default is auto)")
+    tls_group = tls.add_mutually_exclusive_group()
+    tls_group.add_argument("--ldaps",    action="store_true",
+                           help="Force LDAPS (port 636); skip the fallback chain")
+    tls_group.add_argument("--starttls", action="store_true",
+                           help="Force StartTLS upgrade on port 389")
+    tls_group.add_argument("--no-tls",   action="store_true",
+                           help="Force plain LDAP on 389 — unencrypted, unsigned")
+
     # ── DB operations ─────────────────────────────────────────────
     db = p.add_argument_group("Scan history (no live scan required)")
     db.add_argument("--list-scans",  action="store_true",
@@ -272,6 +284,14 @@ def run_scan(args):
     print_banner()
     log.section("Connecting")
 
+    transport = None
+    if args.ldaps:
+        transport = "ldaps"
+    elif args.starttls:
+        transport = "starttls"
+    elif args.no_tls:
+        transport = "plain"
+
     try:
         ldap = LDAPClient(
             dc_ip       = args.dc_ip,
@@ -280,6 +300,7 @@ def run_scan(args):
             password    = args.password,
             hashes      = args.hash,
             use_kerberos= args.kerberos,
+            transport   = transport,
             timeout     = args.timeout,
             stealth     = args.stealth,
         )
