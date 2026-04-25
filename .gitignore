@@ -7,3 +7,15 @@ dist/
 .eggs/
 *.db
 .env
+.venv/
+venv/
+*.swp
+*.swo
+*~
+.DS_Store
+*.log
+*.docx
+*.pdf
+.kerb-map/
+.vscode/
+.idea/

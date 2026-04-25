@@ -1,2 +1,0 @@
-[console_scripts]
-kerb-map = kerb_map.main:main
