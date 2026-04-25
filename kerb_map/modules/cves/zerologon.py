@@ -31,6 +31,9 @@ except ImportError:
 
 
 class ZeroLogon(CVEBase):
+    CVE_ID = "CVE-2020-1472"
+    NAME   = "ZeroLogon"
+
     def check(self) -> CVEResult:
         rpc_indicator = self._probe_netlogon() if IMPACKET_AVAILABLE else None
 
