@@ -107,8 +107,20 @@ SD_FLAGS_OWNER_GROUP_DACL = 0x07
 
 def sd_control(flags: int = SD_FLAGS_OWNER_GROUP_DACL) -> list:
     """LDAP control list to pass to ``conn.search`` so the DC actually
-    returns the requested SD components instead of stripping them."""
-    return [security_descriptor_control(criticality=True, sdflags=flags)]
+    returns the requested SD components instead of stripping them.
+
+    Field bug we don't repeat: ``security_descriptor_control()``
+    already returns ``[Control]`` (a list of one). Wrapping it again
+    here used to produce ``[[Control]]`` — ldap3 then iterated the
+    outer list, saw the inner list, and rejected it with
+    "control must be a sequence of 3 elements: controlType,
+    criticality, controlValue" on every paged search using SD reads.
+    Every v2 module that walks DACLs (Tier-0 ACL audit, DCSync,
+    Shadow Credentials, OU computer-create, GMSA, etc.) silently
+    returned zero findings against real DCs as a result — the unit
+    tests never caught it because they mock ``walk_aces`` /
+    ``parse_sd`` directly and never exercise the real LDAP path."""
+    return security_descriptor_control(criticality=True, sdflags=flags)
 
 
 # ────────────────────────────────────────────────────────────────────── #
@@ -169,7 +181,14 @@ def walk_aces(sd: SR_SECURITY_DESCRIPTOR, object_dn: str = "") -> list[AceMatch]
     if sd is None:
         return []
     out: list[AceMatch] = []
-    dacl = sd.get("Dacl")
+    # impacket's SR_SECURITY_DESCRIPTOR uses ``sd["Dacl"]`` (and raises
+    # KeyError when absent) — not ``.get()``. Field bug we don't repeat:
+    # .get() failed on every real DACL walk while unit tests passed
+    # because they handed in a MagicMock that happily returned None.
+    try:
+        dacl = sd["Dacl"]
+    except (KeyError, TypeError):
+        return out
     if dacl is None:
         return out
     for ace in dacl["Data"]:
