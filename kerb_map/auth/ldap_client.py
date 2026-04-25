@@ -231,6 +231,14 @@ class LDAPClient:
 
         collected: list = []
         cookie = None
+        # Field bug we don't repeat: never reassign ``controls`` inside
+        # the loop. The result-side "controls" is a dict (paged-results
+        # response control); reassigning would shadow the input ``controls``
+        # parameter and the next page's search would receive a dict where
+        # ldap3 expects a list of (oid, criticality, value) tuples,
+        # raising "control must be a sequence of 3 elements" on every
+        # paged query that uses SD controls (e.g. UserAclAudit walking
+        # >1000 users).
         try:
             while True:
                 # Only forward `controls=` when present — ldap3's
@@ -250,11 +258,11 @@ class LDAPClient:
                 self.conn.search(**search_kwargs)
                 collected.extend(self.conn.entries)
 
-                controls = (self.conn.result or {}).get("controls") or {}
+                response_controls = (self.conn.result or {}).get("controls") or {}
                 cookie = (
-                    controls.get(self._PAGED_RESULTS_OID, {})
-                            .get("value", {})
-                            .get("cookie")
+                    response_controls.get(self._PAGED_RESULTS_OID, {})
+                                     .get("value", {})
+                                     .get("cookie")
                 )
                 if not cookie:
                     break
