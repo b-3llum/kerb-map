@@ -217,7 +217,17 @@ Examples:
     # ── Maintenance ─────────────────────────────────────────────
     maint = p.add_argument_group("Maintenance")
     maint.add_argument("--update", action="store_true",
-                       help="Pull latest version from GitHub and reinstall")
+                       help="Pull latest version from GitHub and reinstall. "
+                            "Refuses to run on a dirty working tree or "
+                            "detached HEAD unless --force is given.")
+    maint.add_argument("--tag", metavar="REF",
+                       help="With --update: pin to a specific git tag "
+                            "(e.g. --update --tag v1.2.0) instead of "
+                            "fast-forwarding the current branch.")
+    maint.add_argument("--force", action="store_true",
+                       help="With --update: bypass the dirty-tree / "
+                            "detached-HEAD precheck. The user is on the "
+                            "hook for any merge conflicts that result.")
 
     return p
 
@@ -371,7 +381,15 @@ def cmd_show_scan(scan_id: int):
 # Self-update
 # ──────────────────────────────────────────────────────────────────────────────
 
-def cmd_update():
+def cmd_update(*, tag: str | None = None, force: bool = False):
+    """Brief §3.6 — hardened self-update.
+
+    Refuses to run on a dirty working tree or detached HEAD unless
+    --force is given. Supports --tag REF to pin to a release. Prints
+    the commit range that was pulled.
+    """
+    from kerb_map import maintenance as mx
+
     repo_root = Path(__file__).resolve().parent.parent
     git_dir   = repo_root / ".git"
 
@@ -382,19 +400,48 @@ def cmd_update():
 
     log.section("Updating kerb-map")
 
-    # Pull latest
-    log.info("Running git pull...")
-    result = subprocess.run(
-        ["git", "pull"], cwd=repo_root, capture_output=True, text=True,
-    )
-    if result.returncode != 0:
-        log.error(f"git pull failed: {result.stderr.strip()}")
-        sys.exit(1)
-    console.print(f"  {result.stdout.strip()}")
+    # Precheck — refuse when the operator has work in progress unless
+    # they explicitly opt into the risk with --force.
+    if not force:
+        if not mx.is_clean(repo_root):
+            log.error("Working tree is dirty (uncommitted changes). "
+                      "Commit or stash, then re-run — or pass --force.")
+            sys.exit(1)
+        if mx.is_detached(repo_root):
+            log.error("Repo is in detached-HEAD state. Check out a "
+                      "branch (git switch main), then re-run — or pass --force.")
+            sys.exit(1)
 
-    if "Already up to date" in result.stdout:
+    try:
+        log.info("Fetching from origin...")
+        mx.fetch(repo_root)
+
+        old_commit = mx.current_commit(repo_root)
+
+        if tag:
+            log.info(f"Checking out tag {tag}...")
+            mx.checkout(repo_root, tag)
+        else:
+            log.info("Fast-forwarding current branch...")
+            mx.pull_ff_only(repo_root)
+
+        new_commit = mx.current_commit(repo_root)
+    except mx.UpdateError as e:
+        log.error(str(e))
+        sys.exit(1)
+
+    if old_commit == new_commit:
         log.success("Already on the latest version.")
         return
+
+    # Show what changed — operators want to know what they just pulled
+    # before they re-launch a scan.
+    pulled = mx.log_range(repo_root, old_commit, new_commit)
+    log.success(f"Updated {old_commit} → {new_commit} ({len(pulled)} commits)")
+    for line in pulled[:20]:
+        console.print(f"  [dim]{line}[/dim]")
+    if len(pulled) > 20:
+        console.print(f"  [dim]... and {len(pulled) - 20} more[/dim]")
 
     # Reinstall if pipx is available
     if shutil.which("pipx"):
@@ -404,7 +451,7 @@ def cmd_update():
             capture_output=True, text=True,
         )
         if r.returncode == 0:
-            log.success("Updated and reinstalled via pipx.")
+            log.success("Reinstalled via pipx.")
         else:
             log.warn(f"pipx reinstall failed: {r.stderr.strip()}")
             log.info("Run manually: pipx install --force " + str(repo_root))
@@ -415,7 +462,7 @@ def cmd_update():
             capture_output=True, text=True,
         )
         if r.returncode == 0:
-            log.success("Updated and reinstalled via pip.")
+            log.success("Reinstalled via pip.")
         else:
             log.warn(f"pip reinstall failed: {r.stderr.strip()}")
     else:
@@ -777,7 +824,7 @@ def main():
 
     # Maintenance operations
     if args.update:
-        cmd_update()
+        cmd_update(tag=args.tag, force=args.force)
         return
 
     # DB-only operations
