@@ -3,9 +3,10 @@ Logger — Rich-powered terminal output.
 Centralised so every module imports the same instance.
 """
 
+import datetime
+
 from rich.console import Console
 from rich.theme import Theme
-import datetime
 
 _theme = Theme({
     "info":    "bold cyan",

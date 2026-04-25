@@ -9,12 +9,6 @@ from kerb_map.output.logger import Logger
 
 log = Logger()
 
-try:
-    from ldap3 import Server, Connection, ALL, NTLM
-    LDAP3_OK = True
-except ImportError:
-    LDAP3_OK = False
-
 
 class LDAPSigning(CVEBase):
     CVE_ID = "LDAP-SIGNING"

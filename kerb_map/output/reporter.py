@@ -2,13 +2,11 @@
 Reporter — Rich-powered terminal display for all scan results.
 """
 
+from typing import Any
+
+from rich import box
 from rich.console import Console
 from rich.table import Table
-from rich.panel import Panel
-from rich.columns import Columns
-from rich.text import Text
-from rich import box
-from typing import Dict, Any, List
 
 console = Console()
 
@@ -56,7 +54,7 @@ def print_banner():
 # Domain Info
 # ──────────────────────────────────────────────────────────────────────────────
 
-def print_domain_info(info: Dict[str, Any]):
+def print_domain_info(info: dict[str, Any]):
     if not info:
         return
 
@@ -82,7 +80,7 @@ def print_domain_info(info: Dict[str, Any]):
 # Priority Hit List
 # ──────────────────────────────────────────────────────────────────────────────
 
-def print_priority_targets(targets: List[Dict], top: int = 15):
+def print_priority_targets(targets: list[dict], top: int = 15):
     console.rule("[bold red]⚡  Priority Attack Paths[/bold red]")
 
     if not targets:
@@ -128,7 +126,7 @@ def print_priority_targets(targets: List[Dict], top: int = 15):
 # SPN / Kerberoast Results
 # ──────────────────────────────────────────────────────────────────────────────
 
-def print_spn_results(spns: List[Dict]):
+def print_spn_results(spns: list[dict]):
     console.rule("[bold cyan]Kerberoastable Accounts[/bold cyan]")
 
     if not spns:
@@ -168,7 +166,7 @@ def print_spn_results(spns: List[Dict]):
 # AS-REP Results
 # ──────────────────────────────────────────────────────────────────────────────
 
-def print_asrep_results(users: List[Dict]):
+def print_asrep_results(users: list[dict]):
     console.rule("[bold cyan]AS-REP Roastable Accounts[/bold cyan]")
 
     if not users:
@@ -192,7 +190,7 @@ def print_asrep_results(users: List[Dict]):
 # Delegation Results
 # ──────────────────────────────────────────────────────────────────────────────
 
-def print_delegation_results(delegations: Dict):
+def print_delegation_results(delegations: dict):
     console.rule("[bold cyan]Kerberos Delegation[/bold cyan]")
 
     unc = delegations.get("unconstrained", [])
@@ -270,7 +268,7 @@ def print_cve_results(results: list):
 # User / Policy Results
 # ──────────────────────────────────────────────────────────────────────────────
 
-def print_user_results(user_data: Dict):
+def print_user_results(user_data: dict):
     console.rule("[bold cyan]Domain User Analysis[/bold cyan]")
 
     # Password policy risks
@@ -412,7 +410,7 @@ def print_trust_results(trusts):
 # Summary footer
 # ──────────────────────────────────────────────────────────────────────────────
 
-def print_summary(targets: List[Dict], cve_results: list):
+def print_summary(targets: list[dict], cve_results: list):
     vuln_cves   = sum(1 for r in cve_results if r.vulnerable)
     critical    = sum(1 for t in targets if t.get("severity") == "CRITICAL")
     high        = sum(1 for t in targets if t.get("severity") == "HIGH")
@@ -538,7 +536,7 @@ def print_hygiene_results(hygiene):
     # ── Privileged Group Breakdown ──
     groups = hygiene.privileged_groups
     if groups:
-        console.print(f"  [bold cyan]Privileged Group Membership Breakdown:[/bold cyan]")
+        console.print("  [bold cyan]Privileged Group Membership Breakdown:[/bold cyan]")
         table = Table(box=box.SIMPLE_HEAD, header_style="bold cyan")
         table.add_column("Group", width=30)
         table.add_column("Members", width=8, justify="center")

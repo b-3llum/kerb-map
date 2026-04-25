@@ -3,22 +3,21 @@ SPN Scanner — finds all Kerberoastable accounts and scores them by crackabilit
 Score factors: encryption type, password age, admin membership, SPN type.
 """
 
-from dataclasses import dataclass, field, asdict
+from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
-from typing import List, Optional
 
 
 @dataclass
 class SPNAccount:
     account:          str
-    spns:             List[str]
-    password_age_days: Optional[int]
+    spns:             list[str]
+    password_age_days: int | None
     rc4_allowed:      bool
     aes_only:         bool
     is_admin:         bool
     is_service:       bool        # svc_, sql_, etc.
     description:      str
-    last_logon_days:  Optional[int]
+    last_logon_days:  int | None
     never_logged_in:  bool
     crack_score:      int = 0
     crack_priority:   str = ""
@@ -38,7 +37,7 @@ class SPNScanner:
     def __init__(self, ldap_client):
         self.ldap = ldap_client
 
-    def scan(self) -> List[SPNAccount]:
+    def scan(self) -> list[SPNAccount]:
         entries = self.ldap.query(
             search_filter=(
                 "(&"
@@ -140,7 +139,7 @@ class SPNScanner:
         return bool(enc_types & 0x18) and not bool(enc_types & 0x4)
 
     @staticmethod
-    def _days_since(dt) -> Optional[int]:
+    def _days_since(dt) -> int | None:
         if not dt:
             return None
         if dt.tzinfo is None:

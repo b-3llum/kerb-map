@@ -11,37 +11,44 @@ Usage:
   python kerb-map.py -d corp.local -dc 192.168.1.10 -u jsmith -p pass --cves --aggressive
 """
 
+import argparse
+import datetime
+import shutil
+import subprocess
 import sys
 import time
-import argparse
-import json
-import datetime
-import subprocess
-import shutil
 from pathlib import Path
 
 # ── make sure the package is importable when running as a script ──
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from kerb_map.auth.ldap_client          import LDAPClient
-from kerb_map.modules.spn_scanner       import SPNScanner
-from kerb_map.modules.asrep_scanner     import ASREPScanner
+from kerb_map.auth.ldap_client import LDAPClient
+from kerb_map.db.cache import Cache
+from kerb_map.modules.asrep_scanner import ASREPScanner
+from kerb_map.modules.cve_scanner import CVEScanner
 from kerb_map.modules.delegation_mapper import DelegationMapper
-from kerb_map.modules.user_enumerator   import UserEnumerator
-from kerb_map.modules.enc_auditor       import EncAuditor
-from kerb_map.modules.trust_mapper      import TrustMapper
-from kerb_map.modules.cve_scanner       import CVEScanner
-from kerb_map.modules.hygiene_auditor   import HygieneAuditor
-from kerb_map.modules.scorer            import Scorer
-from kerb_map.output.reporter           import (
-    print_banner, print_domain_info, print_priority_targets,
-    print_spn_results, print_asrep_results, print_delegation_results,
-    print_cve_results, print_user_results, print_summary,
-    print_enc_audit_results, print_trust_results, print_hygiene_results,
+from kerb_map.modules.enc_auditor import EncAuditor
+from kerb_map.modules.hygiene_auditor import HygieneAuditor
+from kerb_map.modules.scorer import Scorer
+from kerb_map.modules.spn_scanner import SPNScanner
+from kerb_map.modules.trust_mapper import TrustMapper
+from kerb_map.modules.user_enumerator import UserEnumerator
+from kerb_map.output.exporter import BloodHoundExporter, JSONExporter
+from kerb_map.output.logger import Logger, console
+from kerb_map.output.reporter import (
+    print_asrep_results,
+    print_banner,
+    print_cve_results,
+    print_delegation_results,
+    print_domain_info,
+    print_enc_audit_results,
+    print_hygiene_results,
+    print_priority_targets,
+    print_spn_results,
+    print_summary,
+    print_trust_results,
+    print_user_results,
 )
-from kerb_map.output.exporter           import JSONExporter, BloodHoundExporter
-from kerb_map.db.cache                  import Cache
-from kerb_map.output.logger             import Logger, console
 
 log = Logger()
 

@@ -5,11 +5,11 @@ Stores every scan so you can diff runs over time and not re-enumerate
 a domain you already scanned.  Automatically creates the DB on first run.
 """
 
-import sqlite3
-import json
 import datetime
+import json
+import sqlite3
 from pathlib import Path
-from typing import Optional, Dict, Any
+from typing import Any
 
 DB_PATH = Path.home() / ".kerb-map" / "results.db"
 
@@ -25,7 +25,7 @@ def _default(obj):
 
 
 class Cache:
-    def __init__(self, db_path: Optional[str] = None):
+    def __init__(self, db_path: str | None = None):
         self.db_path = Path(db_path) if db_path else DB_PATH
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         self._init_db()
@@ -65,7 +65,7 @@ class Cache:
         domain: str,
         dc_ip: str,
         operator: str,
-        data: Dict[str, Any],
+        data: dict[str, Any],
         targets: list,
         duration_s: float = 0.0,
     ) -> int:
@@ -89,7 +89,7 @@ class Cache:
                 )
         return scan_id
 
-    def list_scans(self, domain: Optional[str] = None):
+    def list_scans(self, domain: str | None = None):
         q    = "SELECT id, domain, dc_ip, operator, timestamp, duration_s FROM scans"
         args = ()
         if domain:
@@ -99,7 +99,7 @@ class Cache:
         with sqlite3.connect(self.db_path) as conn:
             return conn.execute(q, args).fetchall()
 
-    def get_scan(self, scan_id: int) -> Optional[Dict]:
+    def get_scan(self, scan_id: int) -> dict | None:
         with sqlite3.connect(self.db_path) as conn:
             row = conn.execute(
                 "SELECT data FROM scans WHERE id = ?", (scan_id,)

@@ -9,14 +9,14 @@ Returns a plain dict so scorer.py and reporter.py can consume it directly
 without needing dataclass attribute access.
 """
 
-from typing import List, Dict, Any
+from typing import Any
 
 
 class DelegationMapper:
     def __init__(self, ldap_client):
         self.ldap = ldap_client
 
-    def map_all(self) -> Dict[str, List[Dict[str, Any]]]:
+    def map_all(self) -> dict[str, list[dict[str, Any]]]:
         """
         Fix: previously returned a DelegationResults dataclass, but scorer.py and
         reporter.py both call delegations.get("unconstrained", []) and access entries
@@ -31,7 +31,7 @@ class DelegationMapper:
 
     # ------------------------------------------------------------------ #
 
-    def _find_unconstrained(self) -> List[Dict[str, Any]]:
+    def _find_unconstrained(self) -> list[dict[str, Any]]:
         """
         TRUSTED_FOR_DELEGATION = 0x80000.
         Filter out DCs (primaryGroupID=516) — they always have this flag set.
@@ -66,7 +66,7 @@ class DelegationMapper:
             })
         return results
 
-    def _find_constrained(self) -> List[Dict[str, Any]]:
+    def _find_constrained(self) -> list[dict[str, Any]]:
         entries = self.ldap.query(
             search_filter="(msDS-AllowedToDelegateTo=*)",
             attributes=[
@@ -97,7 +97,7 @@ class DelegationMapper:
             })
         return results
 
-    def _find_rbcd(self) -> List[Dict[str, Any]]:
+    def _find_rbcd(self) -> list[dict[str, Any]]:
         entries = self.ldap.query(
             search_filter="(msDS-AllowedToActOnBehalfOfOtherIdentity=*)",
             attributes=["sAMAccountName", "dNSHostName"],

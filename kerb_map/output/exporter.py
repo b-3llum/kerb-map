@@ -2,10 +2,10 @@
 Export — JSON and BloodHound-compatible output writers.
 """
 
-import json
 import datetime
+import json
 from pathlib import Path
-from typing import Dict, Any, List
+from typing import Any
 
 from kerb_map.output.logger import Logger
 
@@ -24,7 +24,7 @@ def _default(obj):
 
 
 class JSONExporter:
-    def export(self, data: Dict[str, Any], path: str) -> None:
+    def export(self, data: dict[str, Any], path: str) -> None:
         out = Path(path)
         with out.open("w") as f:
             json.dump(data, f, indent=2, default=_default)
@@ -39,7 +39,7 @@ class BloodHoundExporter:
     Custom edges we add: Kerberoastable, ASREPRoastable, AllowedToDelegate.
     """
 
-    def export(self, data: Dict[str, Any], path: str) -> None:
+    def export(self, data: dict[str, Any], path: str) -> None:
         bh = {
             "meta": {
                 "methods": 0,

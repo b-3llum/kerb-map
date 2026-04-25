@@ -3,19 +3,18 @@ AS-REP Roasting scanner — finds accounts with Kerberos pre-auth disabled.
 These can be attacked without ANY credentials at all.
 """
 
-from dataclasses import dataclass, asdict
+from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
-from typing import List, Optional
 
 
 @dataclass
 class ASREPAccount:
     account:           str
-    password_age_days: Optional[int]
+    password_age_days: int | None
     is_admin:          bool
     is_enabled:        bool
     description:       str
-    last_logon_days:   Optional[int]
+    last_logon_days:   int | None
     crack_score:       int = 0
 
 
@@ -23,7 +22,7 @@ class ASREPScanner:
     def __init__(self, ldap_client):
         self.ldap = ldap_client
 
-    def scan(self) -> List[ASREPAccount]:
+    def scan(self) -> list[ASREPAccount]:
         # DONT_REQUIRE_PREAUTH = 0x400000 (4194304)
         entries = self.ldap.query(
             search_filter=(
@@ -79,7 +78,7 @@ class ASREPScanner:
         return min(score, 100)
 
     @staticmethod
-    def _days_since(dt) -> Optional[int]:
+    def _days_since(dt) -> int | None:
         if not dt:
             return None
         if dt.tzinfo is None:

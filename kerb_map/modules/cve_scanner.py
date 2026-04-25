@@ -1,16 +1,16 @@
 """CVE Scanner — orchestrates all CVE/misconfiguration checks."""
 
-from typing import List
-from kerb_map.modules.cves.cve_base import CVEResult, Severity, SEVERITY_ORDER
-from kerb_map.modules.cves.zerologon      import ZeroLogon
-from kerb_map.modules.cves.nopac          import NoPac
-from kerb_map.modules.cves.printnightmare import PrintNightmare, PetitPotam
-from kerb_map.modules.cves.adcs           import ADCSAudit
-from kerb_map.modules.cves.ms14_068       import MS14068
-from kerb_map.modules.cves.gpp_passwords  import GPPPasswords
-from kerb_map.modules.cves.bronze_bit     import BronzeBit
-from kerb_map.modules.cves.certifried     import Certifried
-from kerb_map.modules.cves.ldap_signing   import LDAPSigning
+
+from kerb_map.modules.cves.adcs import ADCSAudit
+from kerb_map.modules.cves.bronze_bit import BronzeBit
+from kerb_map.modules.cves.certifried import Certifried
+from kerb_map.modules.cves.cve_base import SEVERITY_ORDER, CVEResult
+from kerb_map.modules.cves.gpp_passwords import GPPPasswords
+from kerb_map.modules.cves.ldap_signing import LDAPSigning
+from kerb_map.modules.cves.ms14_068 import MS14068
+from kerb_map.modules.cves.nopac import NoPac
+from kerb_map.modules.cves.printnightmare import PetitPotam, PrintNightmare
+from kerb_map.modules.cves.zerologon import ZeroLogon
 from kerb_map.output.logger import Logger
 
 log = Logger()
@@ -29,7 +29,7 @@ class CVEScanner:
                        PrintNightmare(ldap_client,dc_ip,domain),
                        PetitPotam(ldap_client,dc_ip,domain)]
 
-    def run(self, aggressive=False) -> List[CVEResult]:
+    def run(self, aggressive=False) -> list[CVEResult]:
         checks = self._safe + (self._loud if aggressive else [])
         if not aggressive:
             log.warn("RPC CVE checks skipped — use --aggressive to enable (louder)")

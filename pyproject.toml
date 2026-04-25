@@ -33,6 +33,12 @@ dependencies = [
     "rich>=13.0.0",
 ]
 
+[project.optional-dependencies]
+dev = [
+    "ruff>=0.5",
+    "pytest>=7",
+]
+
 [project.urls]
 Repository = "https://github.com/b-3llum/kerb-map"
 Issues = "https://github.com/b-3llum/kerb-map/issues"
@@ -43,3 +49,22 @@ kerb-map = "kerb_map.main:main"
 
 [tool.setuptools.packages.find]
 include = ["kerb_map*"]
+
+[tool.ruff]
+line-length = 110
+target-version = "py310"
+extend-exclude = ["build", "dist", ".kerb-map", "files"]
+
+[tool.ruff.lint]
+# E,F = pycodestyle/pyflakes baseline. I = isort. UP = pyupgrade.
+# B = flake8-bugbear (catches things like mutable default args).
+# Add new rules opportunistically; do not silence in code unless justified.
+select = ["E", "F", "I", "UP", "B"]
+ignore = [
+    "E501",   # line length is enforced by formatter, not lint
+    "E701",   # `if x: pass` style is used intentionally in compact branches
+    "UP007",  # Optional[X] reads better than X | None for the LDAP API
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["F401", "F811"]    # fixtures sometimes look unused / get redefined

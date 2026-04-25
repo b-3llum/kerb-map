@@ -4,8 +4,8 @@ domain trust enumeration, GPO linkage, LAPS, DnsAdmins.
 All read-only LDAP queries.
 """
 
-from datetime import datetime, timezone
-from typing import Dict, List, Any
+from typing import Any
+
 from kerb_map.output.logger import Logger
 
 log = Logger()
@@ -15,7 +15,7 @@ class UserEnumerator:
     def __init__(self, ldap_client):
         self.ldap = ldap_client
 
-    def enumerate(self) -> Dict[str, Any]:
+    def enumerate(self) -> dict[str, Any]:
         log.info("Enumerating privileged users, stale accounts & domain policies...")
         return {
             "privileged_users": self._privileged_users(),
@@ -27,7 +27,7 @@ class UserEnumerator:
             "gpo_links":        self._gpo_links(),
         }
 
-    def _privileged_users(self) -> List[Dict]:
+    def _privileged_users(self) -> list[dict]:
         entries = self.ldap.query(
             search_filter="(&(objectClass=user)(adminCount=1)(!(userAccountControl:1.2.840.113556.1.4.803:=2)))",
             attributes=["sAMAccountName","memberOf","pwdLastSet","description","userAccountControl","distinguishedName"],
@@ -45,7 +45,7 @@ class UserEnumerator:
         log.success(f"Found {len(results)} privileged account(s) (adminCount=1)")
         return results
 
-    def _stale_accounts(self) -> List[Dict]:
+    def _stale_accounts(self) -> list[dict]:
         # Accounts with no logon since roughly 2020
         threshold = "132000000000000000"
         entries = self.ldap.query(
@@ -66,7 +66,7 @@ class UserEnumerator:
         log.success(f"Found {len(results)} stale account(s)")
         return results
 
-    def _password_policy(self) -> Dict:
+    def _password_policy(self) -> dict:
         entries = self.ldap.query(
             search_filter="(objectClass=domainDNS)",
             attributes=["minPwdLength","maxPwdAge","pwdHistoryLength",
@@ -101,7 +101,7 @@ class UserEnumerator:
         policy["risks"] = risks
         return policy
 
-    def _domain_trusts(self) -> List[Dict]:
+    def _domain_trusts(self) -> list[dict]:
         entries = self.ldap.query(
             search_filter="(objectClass=trustedDomain)",
             attributes=["name","trustType","trustDirection","trustAttributes","flatName"],
@@ -127,7 +127,7 @@ class UserEnumerator:
         log.success(f"Found {len(results)} domain trust(s)")
         return results
 
-    def _check_laps(self) -> Dict:
+    def _check_laps(self) -> dict:
         entries = self.ldap.query(
             search_filter="(&(objectClass=computer)(ms-Mcs-AdmPwd=*))",
             attributes=["sAMAccountName"], size_limit=1,
@@ -143,7 +143,7 @@ class UserEnumerator:
             ),
         }
 
-    def _dns_admins(self) -> List[Dict]:
+    def _dns_admins(self) -> list[dict]:
         entries = self.ldap.query(
             search_filter="(&(objectClass=group)(cn=DnsAdmins))",
             attributes=["member"],
@@ -165,7 +165,7 @@ class UserEnumerator:
         log.success(f"Found {len(results)} DnsAdmins member(s)")
         return results
 
-    def _gpo_links(self) -> List[Dict]:
+    def _gpo_links(self) -> list[dict]:
         entries = self.ldap.query(
             search_filter="(objectClass=groupPolicyContainer)",
             attributes=["displayName","gPCFileSysPath","distinguishedName"],
