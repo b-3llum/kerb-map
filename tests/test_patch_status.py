@@ -173,13 +173,13 @@ def test_zerologon_no_rpc_probe_is_high_indeterminate(monkeypatch):
 
 
 def test_zerologon_rpc_indicates_patched_is_info(monkeypatch):
-    """If the RPC probe affirmatively returns False (patched), down-
-    grade to INFO and mark not-vulnerable."""
+    """If the SecuraBV probe affirmatively returns False (patched),
+    downgrade to INFO and mark not-vulnerable."""
     monkeypatch.setattr(
         "kerb_map.modules.cves.zerologon.IMPACKET_AVAILABLE", True)
 
     class FakeProbeZeroLogon(ZeroLogon):
-        def _probe_netlogon(self) -> bool:
+        def _probe_securabv(self) -> bool:
             return False
     result = FakeProbeZeroLogon(MagicMock(), "1.1.1.1", "corp.local").check()
     assert result.severity == Severity.INFO
@@ -188,15 +188,16 @@ def test_zerologon_rpc_indicates_patched_is_info(monkeypatch):
 
 
 def test_zerologon_rpc_indicates_vulnerable_is_critical(monkeypatch):
-    """RPC accepted the malformed challenge → still report it as
-    CRITICAL but with a 'heuristic' caveat in the patch_status string."""
+    """SecuraBV probe succeeded — DC accepted the zeroed challenge.
+    CRITICAL + RPC_CONFIRMED_VULNERABLE patch_status (no longer a
+    'heuristic' string — the probe is now ground truth)."""
     monkeypatch.setattr(
         "kerb_map.modules.cves.zerologon.IMPACKET_AVAILABLE", True)
 
     class FakeProbeZeroLogon(ZeroLogon):
-        def _probe_netlogon(self) -> bool:
+        def _probe_securabv(self) -> bool:
             return True
     result = FakeProbeZeroLogon(MagicMock(), "1.1.1.1", "corp.local").check()
     assert result.severity == Severity.CRITICAL
     assert result.vulnerable is True
-    assert "heuristic" in result.patch_status.lower()
+    assert "confirms vulnerable" in result.patch_status.lower()
