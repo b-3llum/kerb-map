@@ -40,11 +40,20 @@ apt-get install -y -qq \
     attr                 \
     krb5-user            \
     ldap-utils           \
+    ldb-tools            \
     python3-samba        \
     samba                \
     samba-dsdb-modules   \
     smbclient            \
     winbind
+
+# Field bug from a `vagrant up` validation: ldb-tools (which provides
+# ldbmodify, ldbsearch, ldbadd) wasn't in the original install list.
+# seed_vulnerabilities.sh uses ldbmodify for raw attribute writes
+# (UAC bit toggling, key-credential blob seeding, etc.) and was
+# silently failing every ldbmod call with "command not found". Without
+# this package, every UAC-bit / KCL seed produces no effect — kerb-map
+# then scans a clean lab and finds nothing.
 
 # Stop and disable the bits Samba-AD-DC replaces. samba-ad-dc itself runs
 # its own DNS, so we kill anything else listening on 53.

@@ -33,7 +33,15 @@
 # tests/test_*; the lab gives operator confidence that the *Samba-4-
 # coverable* surface lights up correctly end-to-end.
 
-set -euo pipefail
+# Note: deliberately NOT `set -e`. The script is designed for partial
+# failure — every samba-tool / ldbmodify line uses `|| true` because
+# re-runs hit "already exists" by design (idempotency). Field bug from
+# a `vagrant up` validation: with -e on, the SID-decoding pipeline
+# (`ldap | sed | base64 | python`) exiting non-zero on an idempotent
+# path bailed the whole script. Now: `-u` catches unset vars, `-o
+# pipefail` propagates pipe failures into per-line `|| true`, and the
+# script as a whole completes through every section.
+set -uo pipefail
 
 # ──────────────────────────────────────────────────────────────── settings
 DOMAIN_REALM=LAB.LOCAL
@@ -104,10 +112,18 @@ adminCount: 1" || true
 st user create svc_app "$SEED_PASS" \
     --description='SQL svc — pw=Spring2024! rotate quarterly' || true
 
-# Smith\, John — DN escape edge case (kerb_map.ldap_helpers.cn_from_dn).
-# samba-tool will escape the comma in the CN automatically.
-st user create 'Smith, John' "$SEED_PASS" \
-    --given-name=John --surname='Smith' || true
+# DN-escape edge-case seeding moved to unit tests (kerb_map.ldap_helpers
+# tests cover CN=Smith\, John parsing directly with crafted DN strings).
+#
+# Two `vagrant up` validation attempts both failed: first form
+# (`st user create 'Smith, John'`) → sAMAccountName comma rejection;
+# second form (`smithjohn` SAM + `--surname='Smith, of Sendai'`) →
+# samba-tool constructs CN from surname, comma flows in unescaped,
+# and ldb_add rejects with "invalid dn '(null)'". Samba-tool doesn't
+# expose enough control to seed a comma-bearing CN cleanly. The
+# unit-test path is more reliable.
+st user create 'smithjohn' "$SEED_PASS" \
+    --given-name='John' --surname='Smith' || true
 
 # ────────────────────────────────────────────── v1 — Encryption auditor
 # des_user — USE_DES_KEY_ONLY (UAC bit 0x200000 = 2097152)
@@ -144,19 +160,32 @@ SVC_OLD_SID=$(ldap -LLL -b "${DOMAIN_BASE_DN}" \
     "(sAMAccountName=svc_old_admin)" objectSid 2>/dev/null \
     | sed -n 's/^objectSid:: //p' \
     | head -1 \
-    | base64 -d | python3 -c 'import sys; b=sys.stdin.buffer.read();
-parts=[b[0],int.from_bytes(b[2:8],"big")]
+    | base64 -d | python3 -c 'import sys
+# Field bug from a `vagrant up` validation: when ldapsearch returns
+# no objectSid (account not yet replicated, ACL hides it from the
+# bind), b is empty and the original "parts=[b[0],...]" raised
+# IndexError. Skip cleanly with an empty SID — caller short-circuits.
+b=sys.stdin.buffer.read()
+if len(b) < 8:
+    sys.exit(0)
+parts=[b[0], int.from_bytes(b[2:8],"big")]
 parts+=[int.from_bytes(b[8+i*4:12+i*4],"little") for i in range(b[1])]
 print("S-"+"-".join(str(p) for p in parts))')
-echo "[seed] svc_old_admin SID resolved to: $SVC_OLD_SID"
+echo "[seed] svc_old_admin SID resolved to: ${SVC_OLD_SID:-<empty>}"
 
 # Grant DS-Replication-Get-Changes (CR) + DS-Replication-Get-Changes-All (CR)
-st dsacl set --objectdn="${DOMAIN_BASE_DN}" \
-    --sddl="(OA;;CR;1131f6aa-9c07-11d1-f79f-00c04fc2dcd2;;${SVC_OLD_SID})" \
-    || true
-st dsacl set --objectdn="${DOMAIN_BASE_DN}" \
-    --sddl="(OA;;CR;1131f6ad-9c07-11d1-f79f-00c04fc2dcd2;;${SVC_OLD_SID})" \
-    || true
+# — skip if the SID didn't resolve (the dsacl grant would fail noisily
+# with an empty SID in the SDDL).
+if [ -n "$SVC_OLD_SID" ]; then
+    st dsacl set --objectdn="${DOMAIN_BASE_DN}" \
+        --sddl="(OA;;CR;1131f6aa-9c07-11d1-f79f-00c04fc2dcd2;;${SVC_OLD_SID})" \
+        || true
+    st dsacl set --objectdn="${DOMAIN_BASE_DN}" \
+        --sddl="(OA;;CR;1131f6ad-9c07-11d1-f79f-00c04fc2dcd2;;${SVC_OLD_SID})" \
+        || true
+else
+    echo "[seed] svc_old_admin SID empty — DCSync grant skipped."
+fi
 
 # ───────────────────────────────────────── v2 — Shadow Credentials
 # da_alice — Domain Admin with a populated msDS-KeyCredentialLink
@@ -197,16 +226,27 @@ HELPDESK_SID=$(ldap -LLL -b "${DOMAIN_BASE_DN}" \
     "(sAMAccountName=helpdesk_op)" objectSid 2>/dev/null \
     | sed -n 's/^objectSid:: //p' \
     | head -1 \
-    | base64 -d | python3 -c 'import sys; b=sys.stdin.buffer.read();
-parts=[b[0],int.from_bytes(b[2:8],"big")]
+    | base64 -d | python3 -c 'import sys
+# Field bug from a `vagrant up` validation: when ldapsearch returns
+# no objectSid (account not yet replicated, ACL hides it from the
+# bind), b is empty and the original "parts=[b[0],...]" raised
+# IndexError. Skip cleanly with an empty SID — caller short-circuits.
+b=sys.stdin.buffer.read()
+if len(b) < 8:
+    sys.exit(0)
+parts=[b[0], int.from_bytes(b[2:8],"big")]
 parts+=[int.from_bytes(b[8+i*4:12+i*4],"little") for i in range(b[1])]
 print("S-"+"-".join(str(p) for p in parts))')
 
 # WriteProperty (WP) on the msDS-KeyCredentialLink schema GUID
-# 5b47d60f-6090-40b2-9f37-2a4de88f3063
-st dsacl set --objectdn="CN=bob_da,CN=Users,${DOMAIN_BASE_DN}" \
-    --sddl="(OA;;WP;5b47d60f-6090-40b2-9f37-2a4de88f3063;;${HELPDESK_SID})" \
-    || true
+# 5b47d60f-6090-40b2-9f37-2a4de88f3063 — skip if SID empty.
+if [ -n "$HELPDESK_SID" ]; then
+    st dsacl set --objectdn="CN=bob_da,CN=Users,${DOMAIN_BASE_DN}" \
+        --sddl="(OA;;WP;5b47d60f-6090-40b2-9f37-2a4de88f3063;;${HELPDESK_SID})" \
+        || true
+else
+    echo "[seed] helpdesk_op SID empty — KCL writer grant skipped."
+fi
 
 # ────────────────────────────── v2 — Pre-Win2k Compatible Access
 # Add Authenticated Users (S-1-5-11) to the Pre-Win2k group. Samba's
@@ -233,8 +273,15 @@ APPSUPPORT_SID=$(ldap -LLL -b "${DOMAIN_BASE_DN}" \
     "(sAMAccountName=appsupport)" objectSid 2>/dev/null \
     | sed -n 's/^objectSid:: //p' \
     | head -1 \
-    | base64 -d | python3 -c 'import sys; b=sys.stdin.buffer.read();
-parts=[b[0],int.from_bytes(b[2:8],"big")]
+    | base64 -d | python3 -c 'import sys
+# Field bug from a `vagrant up` validation: when ldapsearch returns
+# no objectSid (account not yet replicated, ACL hides it from the
+# bind), b is empty and the original "parts=[b[0],...]" raised
+# IndexError. Skip cleanly with an empty SID — caller short-circuits.
+b=sys.stdin.buffer.read()
+if len(b) < 8:
+    sys.exit(0)
+parts=[b[0], int.from_bytes(b[2:8],"big")]
 parts+=[int.from_bytes(b[8+i*4:12+i*4],"little") for i in range(b[1])]
 print("S-"+"-".join(str(p) for p in parts))')
 
