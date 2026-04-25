@@ -36,7 +36,12 @@ from kerb_map.modules.spn_scanner import SPNScanner
 from kerb_map.modules.trust_mapper import TrustMapper
 from kerb_map.modules.user_enumerator import UserEnumerator
 from kerb_map.output.bloodhound_ce import BloodHoundCEExporter
-from kerb_map.output.exporter import BloodHoundLiteExporter, JSONExporter
+from kerb_map.output.exporter import (
+    BloodHoundLiteExporter,
+    CSVExporter,
+    JSONExporter,
+    MarkdownExporter,
+)
 from kerb_map.output.logger import Logger, console
 from kerb_map.output.reporter import (
     print_asrep_results,
@@ -151,11 +156,14 @@ Examples:
     # ── Output ────────────────────────────────────────────────────
     out = p.add_argument_group("Output")
     out.add_argument("-o", "--output",
-                     choices=["json", "bloodhound-lite", "bloodhound-ce"],
+                     choices=["json", "bloodhound-lite", "bloodhound-ce",
+                              "csv", "markdown"],
                      help="Write results to file. 'bloodhound-ce' is a real "
                           "BloodHound CE 5.x ingestible zip (users/computers/groups/"
                           "domains JSON + custom KerbMap* edges). 'bloodhound-lite' "
-                          "is the legacy custom-shape JSON (NOT BH-CE-ingestible).")
+                          "is the legacy custom-shape JSON (NOT BH-CE-ingestible). "
+                          "'csv' = one row per priority target (spreadsheet). "
+                          "'markdown' = full operator-report (drops into Obsidian).")
     out.add_argument("--outfile", default=None,
                      help="Output filename (default: kerb-map_<domain>_<ts>.<ext>)")
     out.add_argument("--top",    type=int, default=15,
@@ -665,7 +673,8 @@ def run_scan(args):
     if args.output:
         ts  = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
         ext_map = {"json": "json", "bloodhound-lite": "bloodhound-lite.json",
-                   "bloodhound-ce": "bloodhound.zip"}
+                   "bloodhound-ce": "bloodhound.zip",
+                   "csv": "csv", "markdown": "md"}
         default_name = f"kerb-map_{args.domain}_{ts}.{ext_map[args.output]}"
         outfile      = args.outfile or default_name
 
@@ -681,6 +690,10 @@ def run_scan(args):
             )
             ce.add_findings(v2_findings)
             ce.export(outfile)
+        elif args.output == "csv":
+            CSVExporter().export(full_data, outfile)
+        elif args.output == "markdown":
+            MarkdownExporter().export(full_data, outfile)
 
     ldap.close()
 
