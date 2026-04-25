@@ -26,6 +26,16 @@ SEVERITY_ORDER = {
 }
 
 
+# Patch-status sentinels. Brief §2.1: kerb-map has no honest way to
+# infer KB-applied state from LDAP, so the previous DFL-based heuristic
+# was wrong both ways. Use these strings in CVEResult.evidence so the
+# JSON / wire format carries the operator-readable state without us
+# having to plumb a third boolean.
+PATCH_STATUS_INDETERMINATE = "indeterminate (cannot be inferred from LDAP)"
+PATCH_STATUS_RPC_CONFIRMED_VULNERABLE = "RPC probe confirms vulnerable"
+PATCH_STATUS_RPC_CONFIRMED_PATCHED    = "RPC probe confirms patched"
+
+
 @dataclass
 class CVEResult:
     cve_id:      str
@@ -37,21 +47,26 @@ class CVEResult:
     remediation: str
     next_step:   str
     noise_level: str  = "LOW"   # LOW / MEDIUM / HIGH
-    references:  list[str] = field(default_factory=list)  # Fix: was missing, caused unexpected kwarg crash
+    references:  list[str] = field(default_factory=list)
+    # Brief §2.1: distinguish "we observed the vulnerability" from
+    # "the preconditions are present but we couldn't confirm patch status."
+    # The Scorer downgrades indeterminate findings so they don't dominate
+    # the priority table.
+    patch_status: str = PATCH_STATUS_INDETERMINATE
 
     def to_dict(self) -> dict[str, Any]:
-        """Fix: callers in cli.py call r.to_dict() — dataclass has no such method by default."""
         return {
-            "cve_id":      self.cve_id,
-            "name":        self.name,
-            "severity":    self.severity.value,   # serialize enum to string
-            "vulnerable":  self.vulnerable,
-            "reason":      self.reason,
-            "evidence":    self.evidence,
-            "remediation": self.remediation,
-            "next_step":   self.next_step,
-            "noise_level": self.noise_level,
-            "references":  self.references,
+            "cve_id":       self.cve_id,
+            "name":         self.name,
+            "severity":     self.severity.value,
+            "vulnerable":   self.vulnerable,
+            "reason":       self.reason,
+            "evidence":     self.evidence,
+            "remediation":  self.remediation,
+            "next_step":    self.next_step,
+            "noise_level":  self.noise_level,
+            "references":   self.references,
+            "patch_status": self.patch_status,
         }
 
 
