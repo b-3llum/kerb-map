@@ -1,4 +1,4 @@
-from kerb_map.main import main
+from kerb_map.cli import main
 
 if __name__ == "__main__":
     main()
