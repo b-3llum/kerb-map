@@ -669,6 +669,25 @@ def run_scan(args):
     domain_info = ldap.get_domain_info()
     print_domain_info(domain_info)
 
+    # Clock skew check — Kerberos breaks at >5min skew with the DC, but
+    # LDAP/NTLM doesn't, so without this warning the operator scans
+    # cleanly then gets KRB_AP_ERR_SKEW from every Kerberos recipe in
+    # the next_step output. Field-bug fix.
+    from kerb_map.time_check import (
+        format_skew_warning,
+        is_skew_excessive,
+        query_dc_skew,
+    )
+    skew = query_dc_skew(args.dc_ip)
+    if skew is None:
+        log.debug(f"Clock skew probe to {args.dc_ip}:123/udp got no answer "
+                  f"— firewall? Kerberos recipes may still fail silently if "
+                  f"local clock differs from the DC.")
+    elif is_skew_excessive(skew):
+        log.warn(format_skew_warning(skew, dc_ip=args.dc_ip))
+    else:
+        log.debug(f"Clock skew with DC: {skew:+d}s (within Kerberos tolerance)")
+
     # Build the placeholder substitution context (brief §3.5). Applied
     # below to every CVE / v2 / scorer next_step so operators can copy
     # the recipe straight into a terminal.
