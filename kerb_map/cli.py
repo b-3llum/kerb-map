@@ -13,6 +13,8 @@ Usage:
 
 import argparse
 import datetime
+import getpass
+import os
 import shutil
 import subprocess
 import sys
@@ -51,6 +53,10 @@ from kerb_map.output.reporter import (
 )
 
 log = Logger()
+
+# Marker placed in args.password / args.hash by argparse when the flag
+# was given without a value — meaning "prompt me interactively".
+PROMPT_SENTINEL = "<<KERBMAP_PROMPT>>"
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Argument Parser
@@ -93,9 +99,24 @@ Examples:
     req.add_argument("-u",  "--username", help="Username")
 
     # ── Auth ──────────────────────────────────────────────────────
+    # Avoid putting the secret on argv (visible in `ps aux`, shell history,
+    # auditd). Prefer --password-stdin / --password-env, or omit the value
+    # to be prompted interactively.
     auth = p.add_argument_group("Authentication (pick one)")
-    auth.add_argument("-p",  "--password",  help="Plaintext password")
-    auth.add_argument("-H",  "--hash",      help="NTLM hash  LM:NT  or  NT only")
+    auth.add_argument("-p",  "--password",
+                      nargs="?", const=PROMPT_SENTINEL, default=None,
+                      help="Plaintext password (omit value to prompt — avoids ps-aux leak)")
+    auth.add_argument("--password-stdin", action="store_true",
+                      help="Read password from stdin (one line, trailing newline stripped)")
+    auth.add_argument("--password-env", metavar="VAR",
+                      help="Read password from the named environment variable")
+    auth.add_argument("-H",  "--hash",
+                      nargs="?", const=PROMPT_SENTINEL, default=None,
+                      help="NTLM hash LM:NT or NT only (omit value to prompt)")
+    auth.add_argument("--hash-stdin", action="store_true",
+                      help="Read NTLM hash from stdin")
+    auth.add_argument("--hash-env", metavar="VAR",
+                      help="Read NTLM hash from the named environment variable")
     auth.add_argument("-k",  "--kerberos",  action="store_true",
                       help="Use ccache ticket (set KRB5CCNAME env var first)")
 
@@ -252,6 +273,42 @@ def cmd_update():
 
 
 # ──────────────────────────────────────────────────────────────────────────────
+# Secret resolution
+# ──────────────────────────────────────────────────────────────────────────────
+
+def resolve_secret(arg_value, env_var, read_stdin, *, label):
+    """Resolve a secret from --foo, --foo-env VAR, --foo-stdin, or interactive
+    prompt. Returns the secret string or ``None`` if no source was provided.
+
+    Resolution order: --foo-env > --foo-stdin > --foo (or prompt sentinel).
+    Exits the process on inconsistent input rather than silently picking one.
+    """
+    sources = [bool(env_var), bool(read_stdin), arg_value is not None]
+    if sum(sources) > 1:
+        log.error(f"--{label}, --{label}-stdin, and --{label}-env are mutually exclusive")
+        sys.exit(1)
+
+    if env_var:
+        val = os.environ.get(env_var)
+        if val is None:
+            log.error(f"--{label}-env: environment variable {env_var!r} is not set")
+            sys.exit(1)
+        return val
+
+    if read_stdin:
+        val = sys.stdin.readline()
+        if not val:
+            log.error(f"--{label}-stdin: no input received on stdin")
+            sys.exit(1)
+        return val.rstrip("\r\n")
+
+    if arg_value == PROMPT_SENTINEL:
+        return getpass.getpass(f"{label.capitalize()}: ")
+
+    return arg_value
+
+
+# ──────────────────────────────────────────────────────────────────────────────
 # Main scan
 # ──────────────────────────────────────────────────────────────────────────────
 
@@ -261,8 +318,24 @@ def run_scan(args):
         log.error("--domain, --dc-ip, and --username are required for a live scan.")
         sys.exit(1)
 
-    if not args.password and not args.hash and not args.kerberos:
-        log.error("Provide one of: --password, --hash, or --kerberos")
+    # Resolve secrets BEFORE handing them to LDAPClient. Doing it here keeps
+    # passwords / hashes off the process command line: the operator can use
+    # --password-stdin, --password-env, or `-p` with no value (interactive
+    # prompt) instead of `-p Password123`.
+    password = resolve_secret(args.password, args.password_env, args.password_stdin,
+                              label="password")
+    nthash   = resolve_secret(args.hash,     args.hash_env,     args.hash_stdin,
+                              label="hash")
+
+    if not password and not nthash and not args.kerberos:
+        log.error(
+            "Provide one of: --password (or --password-stdin / --password-env), "
+            "--hash (or --hash-stdin / --hash-env), or --kerberos"
+        )
+        sys.exit(1)
+
+    if password and nthash:
+        log.error("Pick one credential: password OR hash, not both")
         sys.exit(1)
 
     # ── Determine which modules to run ───────────────────────────
@@ -297,8 +370,8 @@ def run_scan(args):
             dc_ip       = args.dc_ip,
             domain      = args.domain,
             username    = args.username,
-            password    = args.password,
-            hashes      = args.hash,
+            password    = password,
+            hashes      = nthash,
             use_kerberos= args.kerberos,
             transport   = transport,
             timeout     = args.timeout,
