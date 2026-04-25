@@ -181,6 +181,10 @@ Examples:
                     help="List all scans stored in local cache")
     db.add_argument("--show-scan",   type=int, metavar="ID",
                     help="Display findings from a previous scan by ID")
+    db.add_argument("--diff",        nargs=2, type=int, metavar=("A", "B"),
+                    help="Diff two scans by ID — prints REMOVED (fixed) / "
+                         "ADDED (new) / UNCHANGED (still exposed) buckets. "
+                         "The high-value retest feature.")
 
     # ── Maintenance ─────────────────────────────────────────────
     maint = p.add_argument_group("Maintenance")
@@ -207,6 +211,64 @@ def cmd_list_scans():
             f"Operator: {r[3] or 'unknown':<15}  {r[4]}"
         )
     console.print()
+
+
+def cmd_diff(a_id: int, b_id: int):
+    """Diff two cached scans. ``A`` is the older / baseline; ``B`` is the
+    newer / re-test. The console output is intentionally three buckets
+    in green / red / yellow so the operator can grep visually."""
+    from kerb_map.diff import diff_findings
+
+    cache = Cache()
+    a_scan = cache.get_scan(a_id)
+    b_scan = cache.get_scan(b_id)
+    if not a_scan or not b_scan:
+        missing = []
+        if not a_scan:
+            missing.append(str(a_id))
+        if not b_scan:
+            missing.append(str(b_id))
+        log.error(f"Scan ID(s) not found: {', '.join(missing)}")
+        sys.exit(1)
+
+    a_findings = cache.get_findings(a_id)
+    b_findings = cache.get_findings(b_id)
+    result     = diff_findings(a_findings, b_findings, scan_a_id=a_id, scan_b_id=b_id)
+
+    a_meta = a_scan.get("meta", {})
+    b_meta = b_scan.get("meta", {})
+
+    console.print(
+        f"\n[bold cyan]Diff: scan #{a_id}[/bold cyan] "
+        f"({a_meta.get('domain', '?')} @ {a_meta.get('timestamp', '?')})"
+        f"  →  [bold cyan]scan #{b_id}[/bold cyan] "
+        f"({b_meta.get('domain', '?')} @ {b_meta.get('timestamp', '?')})"
+    )
+    console.print(
+        f"  [green]REMOVED  {len(result.removed):>3}  (fixed)[/green]"
+        f"  [red]ADDED  {len(result.added):>3}  (new)[/red]"
+        f"  [yellow]UNCHANGED  {len(result.unchanged):>3}  (still exposed)[/yellow]\n"
+    )
+
+    def _print_bucket(label: str, colour: str, findings: list[dict]):
+        if not findings:
+            return
+        console.print(f"[bold {colour}]── {label} ──[/bold {colour}]")
+        for f in findings:
+            sev_col = {"CRITICAL": "red", "HIGH": "red", "MEDIUM": "yellow",
+                       "LOW": "green", "INFO": "dim"}.get(f.get("severity", ""), "white")
+            console.print(
+                f"  [{sev_col}]{f.get('severity', '?'):<10}[/{sev_col}] "
+                f"[cyan]{f.get('attack', '?'):<40}[/cyan]  "
+                f"{f.get('target', '?')}"
+            )
+            if f.get("reason"):
+                console.print(f"             [dim]{f['reason']}[/dim]")
+        console.print()
+
+    _print_bucket("REMOVED — customer fixed these",      "green",  result.removed)
+    _print_bucket("ADDED — new findings since last scan", "red",    result.added)
+    _print_bucket("UNCHANGED — still exposed",            "yellow", result.unchanged)
 
 
 def cmd_show_scan(scan_id: int):
@@ -606,6 +668,10 @@ def main():
 
     if args.show_scan:
         cmd_show_scan(args.show_scan)
+        return
+
+    if args.diff:
+        cmd_diff(args.diff[0], args.diff[1])
         return
 
     # Live scan
