@@ -241,6 +241,22 @@ class BloodHoundCEExporter:
                         "target_kind": data.get("target_kind"),
                     },
                 })
+            # ── OU computer-create (OuComputerCreate module) ────
+            #
+            # The "post-MAQ-hardening RBCD pivot" edge — operators can
+            # MATCH (u)-[:KerbMapCreateComputerOu]->(ou) to find every
+            # principal that can drop a machine account into an OU.
+            elif attack.startswith("OU computer-create") and data.get("writer_sid"):
+                self._extra_edges.append({
+                    "source": data["writer_sid"],
+                    "target": data.get("target_dn") or "",
+                    "edge":   "KerbMapCreateComputerOu",
+                    "props":  {
+                        "right":       data.get("right"),
+                        "target_kind": data.get("target_kind"),
+                        "maq":         data.get("maq"),
+                    },
+                })
 
     # ------------------------------------------------------------------ #
     #  Collection → zip                                                  #

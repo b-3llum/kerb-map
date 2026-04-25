@@ -482,3 +482,34 @@ def test_tier0_acl_finding_without_writer_sid_skipped(tmp_path):
     with zipfile.ZipFile(out) as zf:
         # No edges file — the broken finding was skipped silently.
         assert "kerbmap_edges.json" not in zf.namelist()
+
+
+# ───────────── OU computer-create findings → KerbMapCreateComputerOu ────
+
+
+def test_ou_create_finding_emits_kerbmap_createcomputerou_edge(tmp_path):
+    """Per-OU edge so a CRTE-style 'find every principal that can drop
+    a machine account into an OU' query is one Cypher hop."""
+    exp = _exporter()
+    exp.add_findings([Finding(
+        target="HelpdeskOU",
+        attack="OU computer-create: CreateChild(computer)",
+        severity="HIGH", priority=86, reason="...",
+        data={
+            "writer_sid":  "S-1-5-21-10-20-30-1900",
+            "writer_sam":  "helpdesk_op",
+            "target_dn":   "OU=Helpdesk,DC=corp,DC=local",
+            "target_kind": "OU",
+            "right":       "CreateChild(computer)",
+            "maq":         0,
+        },
+    )])
+    out = exp.export(str(tmp_path / "ou_create.zip"))
+    edges = _read_edges(out)
+    assert len(edges) == 1
+    edge = edges[0]
+    assert edge["edge"]   == "KerbMapCreateComputerOu"
+    assert edge["source"] == "S-1-5-21-10-20-30-1900"
+    assert edge["target"] == "OU=Helpdesk,DC=corp,DC=local"
+    assert edge["props"]["right"] == "CreateChild(computer)"
+    assert edge["props"]["maq"]   == 0
