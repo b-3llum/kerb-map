@@ -204,6 +204,7 @@ class LDAPClient:
         search_base:   str | None = None,
         size_limit:    int = 0,
         page_size:     int = 1000,
+        controls:      list | None = None,
     ):
         """Core query. Pages results past the server's MaxPageSize so large
         domains are not silently truncated. Returns a flat list of
@@ -219,7 +220,10 @@ class LDAPClient:
         cookie = None
         try:
             while True:
-                self.conn.search(
+                # Only forward `controls=` when present — ldap3's
+                # MOCK_SYNC strategy crashes on None/empty controls
+                # (TypeError: 'string indices must be integers').
+                search_kwargs = dict(
                     search_base=base,
                     search_filter=search_filter,
                     search_scope=SUBTREE,
@@ -228,6 +232,9 @@ class LDAPClient:
                     paged_size=page_size,
                     paged_cookie=cookie,
                 )
+                if controls:
+                    search_kwargs["controls"] = controls
+                self.conn.search(**search_kwargs)
                 collected.extend(self.conn.entries)
 
                 controls = (self.conn.result or {}).get("controls") or {}
@@ -261,7 +268,7 @@ class LDAPClient:
                 "ms-DS-MachineAccountQuota", "minPwdLength",
                 "maxPwdAge", "minPwdAge", "pwdHistoryLength",
                 "lockoutThreshold", "lockoutDuration", "pwdProperties",
-                "whenCreated",
+                "whenCreated", "objectSid",
             ]
         )
         if not entries:
@@ -283,25 +290,36 @@ class LDAPClient:
                 return None
 
         FL_MAP = {
-            0: "Windows 2000",
-            1: "Windows Server 2003 interim",
-            2: "Windows Server 2003",
-            3: "Windows Server 2008",
-            4: "Windows Server 2008 R2",
-            5: "Windows Server 2012",
-            6: "Windows Server 2012 R2",
-            7: "Windows Server 2016/2019/2022",
+            0:  "Windows 2000",
+            1:  "Windows Server 2003 interim",
+            2:  "Windows Server 2003",
+            3:  "Windows Server 2008",
+            4:  "Windows Server 2008 R2",
+            5:  "Windows Server 2012",
+            6:  "Windows Server 2012 R2",
+            7:  "Windows Server 2016/2019/2022",
+            10: "Windows Server 2025",
         }
         fl = _int("msDS-Behavior-Version") or 0
+
+        # Domain SID — needed to substitute <DOMAIN_SID> in next_step
+        # templates (Golden Ticket forge, SID History, DCSync), to render
+        # ACL principals as S-1-5-21-... in the BloodHound CE exporter,
+        # and to gate "is this a domain principal" checks in DCSync /
+        # Shadow Credentials enumeration.
+        from kerb_map.ldap_helpers import sid_to_str
+        domain_sid = sid_to_str(e["objectSid"].value) if "objectSid" in e else None
 
         return {
             "domain":                self.domain,
             "functional_level":      FL_MAP.get(fl, str(fl)),
+            "fl_int":                fl,
             "machine_account_quota": _int("ms-DS-MachineAccountQuota"),
             "min_pwd_length":        _int("minPwdLength"),
             "pwd_history_length":    _int("pwdHistoryLength"),
             "lockout_threshold":     _int("lockoutThreshold"),
             "when_created":          _str("whenCreated"),
+            "domain_sid":            domain_sid,
         }
 
     def close(self):

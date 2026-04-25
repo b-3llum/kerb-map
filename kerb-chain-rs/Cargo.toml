@@ -1,0 +1,43 @@
+[package]
+name        = "kerb-chain"
+version     = "2.0.0-rs"
+edition     = "2021"
+rust-version = "1.75"
+authors     = ["b-3llum"]
+description = "Playbook-driven AD attack chain orchestrator (Rust port)"
+license     = "MIT"
+repository  = "https://github.com/b-3llum/kerb-map"
+readme      = "README.md"
+categories  = ["command-line-utilities"]
+
+# A single static binary is the whole point of moving off Python — make
+# sure cargo build --release actually produces one.
+[[bin]]
+name = "kerb-chain"
+path = "src/main.rs"
+
+[lib]
+name = "kerb_chain"
+path = "src/lib.rs"
+
+[dependencies]
+anyhow         = "1.0"
+chrono         = { version = "0.4", default-features = false, features = ["clock", "serde"] }
+clap           = { version = "4", features = ["derive"] }
+glob           = "0.3"
+regex          = "1"
+serde          = { version = "1", features = ["derive"] }
+serde_json     = "1"
+serde_yaml     = "0.9"
+shell-words    = "1"
+
+[dev-dependencies]
+tempfile       = "3"
+
+[profile.release]
+# Single-binary distribution. LTO + strip cuts the artifact significantly
+# without sacrificing the runtime behaviour we care about.
+lto         = "fat"
+codegen-units = 1
+strip       = "symbols"
+panic       = "abort"

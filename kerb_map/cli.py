@@ -35,6 +35,7 @@ from kerb_map.modules.scorer import Scorer
 from kerb_map.modules.spn_scanner import SPNScanner
 from kerb_map.modules.trust_mapper import TrustMapper
 from kerb_map.modules.user_enumerator import UserEnumerator
+from kerb_map.output.bloodhound_ce import BloodHoundCEExporter
 from kerb_map.output.exporter import BloodHoundLiteExporter, JSONExporter
 from kerb_map.output.logger import Logger, console
 from kerb_map.output.reporter import (
@@ -51,6 +52,7 @@ from kerb_map.output.reporter import (
     print_trust_results,
     print_user_results,
 )
+from kerb_map.plugin import ScanContext, all_modules, discover
 
 log = Logger()
 
@@ -134,14 +136,19 @@ Examples:
                       help="Defensive hygiene audit (LAPS coverage, krbtgt age, SID history, FGPP, stale machines, etc.)")
     mods.add_argument("--aggressive",  action="store_true",
                       help="Enable RPC-based CVE probes (louder — generates Event 5145)")
+    mods.add_argument("--v2", action="store_true",
+                      help="Run the v2 plugin-contract modules (DCSync rights, "
+                           "Shadow Credentials, BadSuccessor — auto-discovered via "
+                           "@register). Additive to the legacy modules above.")
 
     # ── Output ────────────────────────────────────────────────────
     out = p.add_argument_group("Output")
     out.add_argument("-o", "--output",
-                     choices=["json", "bloodhound-lite"],
-                     help="Write results to file. 'bloodhound-lite' is kerb-map's "
-                          "own JSON shape (NOT ingestible into BloodHound CE / 4.x / 5.x; "
-                          "see exporter.BloodHoundLiteExporter docstring)")
+                     choices=["json", "bloodhound-lite", "bloodhound-ce"],
+                     help="Write results to file. 'bloodhound-ce' is a real "
+                          "BloodHound CE 5.x ingestible zip (users/computers/groups/"
+                          "domains JSON + custom KerbMap* edges). 'bloodhound-lite' "
+                          "is the legacy custom-shape JSON (NOT BH-CE-ingestible).")
     out.add_argument("--outfile", default=None,
                      help="Output filename (default: kerb-map_<domain>_<ts>.<ext>)")
     out.add_argument("--top",    type=int, default=15,
@@ -450,10 +457,49 @@ def run_scan(args):
         hygiene = HygieneAuditor(ldap).audit()
         print_hygiene_results(hygiene)
 
+    # ── v2 plugin modules (DCSync rights, Shadow Creds, BadSuccessor) ─
+    v2_results: dict[str, dict] = {}
+    v2_findings: list = []
+    if args.v2:
+        discover()  # imports @register'd modules under kerb_map.modules
+        ctx = ScanContext(
+            ldap=ldap, domain=args.domain, base_dn=ldap.base_dn,
+            dc_ip=args.dc_ip, aggressive=args.aggressive,
+            domain_info=domain_info,
+            domain_sid=domain_info.get("domain_sid"),
+        )
+        for cls in all_modules():
+            if cls.requires_aggressive and not args.aggressive:
+                continue
+            log.section(f"v2: {cls.name}")
+            try:
+                result = cls().scan(ctx)
+            except Exception as e:
+                log.warn(f"v2 module {cls.name} failed: {e}")
+                continue
+            v2_results[cls.flag] = result.raw if result.raw is not None else {}
+            v2_findings.extend(result.findings)
+            for f in result.findings:
+                sev_col = {"CRITICAL": "red", "HIGH": "red", "MEDIUM": "yellow",
+                           "LOW": "green", "INFO": "dim"}.get(f.severity, "white")
+                console.print(
+                    f"  [{sev_col}]{f.severity:<10}[/{sev_col}] "
+                    f"[cyan]{f.attack:<40}[/cyan]  {f.target}"
+                )
+                if f.reason:
+                    console.print(f"             [dim]{f.reason}[/dim]")
+
     # ── Score & Rank ──────────────────────────────────────────────
     log.section("Attack Path Scoring")
     targets = Scorer().rank(spns, asrep, delegations, cve_results, user_data,
                             enc_audit=enc_audit, trusts=trusts, hygiene=hygiene)
+    # Fold v2 findings into the priority list. The legacy Scorer doesn't
+    # know about them, so we append directly — already structured the
+    # same shape (target / attack / severity / priority / reason /
+    # next_step / category / mitre / data) by the Finding dataclass.
+    if v2_findings:
+        targets.extend(f.as_dict() for f in v2_findings)
+        targets.sort(key=lambda t: t.get("priority", 0), reverse=True)
     print_priority_targets(targets, top=args.top)
 
     # ── Summary ───────────────────────────────────────────────────
@@ -497,6 +543,7 @@ def run_scan(args):
             "service_acct_hygiene": hygiene.service_acct_hygiene if hygiene else [],
         },
         "targets":     targets,
+        "v2":          v2_results,
     }
 
     # ── Cache ─────────────────────────────────────────────────────
@@ -518,14 +565,23 @@ def run_scan(args):
     # ── File export ───────────────────────────────────────────────
     if args.output:
         ts  = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-        ext = "json" if args.output == "json" else "bloodhound-lite.json"
-        default_name = f"kerb-map_{args.domain}_{ts}.{ext}"
+        ext_map = {"json": "json", "bloodhound-lite": "bloodhound-lite.json",
+                   "bloodhound-ce": "bloodhound.zip"}
+        default_name = f"kerb-map_{args.domain}_{ts}.{ext_map[args.output]}"
         outfile      = args.outfile or default_name
 
         if args.output == "json":
             JSONExporter().export(full_data, outfile)
         elif args.output == "bloodhound-lite":
             BloodHoundLiteExporter().export(full_data, outfile)
+        elif args.output == "bloodhound-ce":
+            ce = BloodHoundCEExporter(
+                ldap=ldap, domain=args.domain,
+                domain_sid=domain_info.get("domain_sid"),
+                base_dn=ldap.base_dn,
+            )
+            ce.add_findings(v2_findings)
+            ce.export(outfile)
 
     ldap.close()
 
