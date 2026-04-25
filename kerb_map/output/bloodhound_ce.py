@@ -135,6 +135,30 @@ class BloodHoundCEExporter:
             #   MATCH (u:User)-[:KerbMapEsc13]->(t) RETURN u, t
             # to find every account that can enrol in an ESC13 template
             # without having to grep the JSON.
+            # ── ESC4 — non-admin write on a template ────────────
+            elif attack.startswith("AD CS ESC4") and data.get("writer_sid"):
+                self._extra_edges.append({
+                    "source": data["writer_sid"],
+                    "target": data.get("template_dn") or "",
+                    "edge":   "KerbMapEsc4",
+                    "props":  {"right": data.get("right")},
+                })
+            # ── ESC5 — non-admin write on a PKI container ───────
+            elif attack.startswith("AD CS ESC5") and data.get("writer_sid"):
+                self._extra_edges.append({
+                    "source": data["writer_sid"],
+                    "target": data.get("container_dn") or "",
+                    "edge":   "KerbMapEsc5",
+                    "props":  {"right": data.get("right")},
+                })
+            # ── ESC7 — CA officer rights ────────────────────────
+            elif attack.startswith("AD CS ESC7") and data.get("writer_sid"):
+                self._extra_edges.append({
+                    "source": data["writer_sid"],
+                    "target": data.get("ca_dn") or "",
+                    "edge":   "KerbMapEsc7",
+                    "props":  {"rights": data.get("rights", [])},
+                })
             elif attack.startswith("AD CS ESC9"):
                 if data.get("template_dn"):
                     self._extra_edges.append({

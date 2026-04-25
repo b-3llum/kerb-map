@@ -1,15 +1,25 @@
 """
-ADCS Extended — ESC9, ESC13, ESC15 (EKUwu / CVE-2024-49019).
+ADCS Extended — ESC4, ESC5, ESC7, ESC9, ESC13, ESC15 (EKUwu / CVE-2024-49019).
 
-The bundled CVE module covers ESC1/2/3/8 well; the brief's §2.3
-audit + the 2026 landscape research both flagged ESC9, ESC13, and
-ESC15 as the gaps that matter most. Each is a passive LDAP read
-against ``CN=Certificate Templates,CN=Public Key Services,
-CN=Services,CN=Configuration,DC=...`` plus a per-template ACL walk.
+Combined with the legacy ADCS module's ESC1/2/3/8 coverage, this
+brings kerb-map to ESC1–15 (skipping ESC6 which needs RPC-level CA
+registry reads — tracked separately).
 
-The three checks share one query and one ACL pass per template, so
-the module costs one extra LDAP round-trip vs. the existing ADCS
-module — not three.
+Each ESC variant is a passive LDAP read; the three groups are:
+
+  Template-level (one DACL walk per template):
+    ESC4   — dangerous template ACLs (write rights to non-admins)
+    ESC9   — CT_FLAG_NO_SECURITY_EXTENSION + public enrol
+    ESC13  — msPKI-Certificate-Policy linked to privileged group
+    ESC15  — v1 schema templates publicly enrolable (EKUwu / CVE-2024-49019)
+
+  PKI container-level:
+    ESC5   — dangerous ACLs on CN=Public Key Services container
+             (and CN=Certificate Templates / CN=Enrollment Services)
+
+  CA-level:
+    ESC7   — ManageCA / ManageCertificates extended rights granted to
+             non-admin principals on a pKIEnrollmentService object
 
 ──────────────────────────────────────────────────────────────────────
 ESC9 — CT_FLAG_NO_SECURITY_EXTENSION
@@ -65,6 +75,8 @@ from kerb_map.acl import (
     ADS_RIGHT_DS_CONTROL_ACCESS,
     ADS_RIGHT_GENERIC_ALL,
     ADS_RIGHT_GENERIC_WRITE,
+    ADS_RIGHT_WRITE_DAC,
+    ADS_RIGHT_WRITE_OWNER,
     is_well_known_privileged,
     parse_sd,
     resolve_sids,
@@ -85,16 +97,53 @@ PUBLIC_ENROLMENT_SIDS = {
 }
 # Plus the domain-relative "Domain Users" (RID 513). Resolved later.
 
-# The Enrollment-Rights extended-right GUID. An ACE granting CONTROL_ACCESS
-# with this GUID = the trustee can enrol in the template.
-EXT_RIGHT_ENROLL = "0e10c968-78fb-11d2-90d4-00c04f79dc55"
+# Extended-right GUIDs for ADCS-specific control access.
+EXT_RIGHT_ENROLL              = "0e10c968-78fb-11d2-90d4-00c04f79dc55"
+# ESC7 — CA-level extended rights. An ACE granting CONTROL_ACCESS with
+# either GUID lets the trustee become a CA admin (ManageCA) or approve
+# their own pending certs (ManageCertificates).
+EXT_RIGHT_MANAGE_CA           = "7fb2d3d0-f86c-49aa-94e0-dbf3acec92be"
+EXT_RIGHT_MANAGE_CERTIFICATES = "0e10c969-78fb-11d2-90d4-00c04f79dc55"
+
+
+# Write rights that = ESC4 (template) / ESC5 (container) takeover.
+# Listed in severity-priority order so first match wins.
+DANGEROUS_WRITE_RIGHTS: list[tuple[str, int, str, int]] = [
+    # (label,           mask,                     severity,   priority)
+    ("GenericAll",      ADS_RIGHT_GENERIC_ALL,    "CRITICAL", 95),
+    ("WriteDACL",       ADS_RIGHT_WRITE_DAC,      "CRITICAL", 93),
+    ("WriteOwner",      ADS_RIGHT_WRITE_OWNER,    "CRITICAL", 92),
+    ("GenericWrite",    ADS_RIGHT_GENERIC_WRITE,  "HIGH",     85),
+]
+
+
+def _classify_write_ace(ace) -> dict | None:
+    """Return {label, severity, priority} if the ACE grants any of the
+    dangerous write rights, None otherwise. First match wins."""
+    for label, mask, severity, priority in DANGEROUS_WRITE_RIGHTS:
+        if ace.has_right(mask):
+            return {"label": label, "severity": severity, "priority": priority}
+    return None
+
+
+def _grants_ca_extended_right(ace, guid: str) -> bool:
+    """ACE grants the named CA-level extended right. Mirrors
+    AceMatch.has_extended_right but inlined to keep this module
+    self-contained."""
+    if ace.has_right(ADS_RIGHT_GENERIC_ALL):
+        return True
+    if not ace.has_right(ADS_RIGHT_DS_CONTROL_ACCESS):
+        return False
+    if ace.object_type_guid is None:
+        return True   # CONTROL_ACCESS without GUID = all extended rights
+    return ace.object_type_guid.lower() == guid.lower()
 
 
 @register
 class AdcsExtended(Module):
-    name        = "AD CS Extended (ESC9/ESC13/ESC15)"
+    name        = "AD CS Extended (ESC4/5/7/9/13/15)"
     flag        = "adcs-extended"
-    description = "Detect ESC9 (no-security-ext), ESC13 (OIDToGroupLink), ESC15 (EKUwu/CVE-2024-49019)"
+    description = "Detect ESC4 (template ACL), ESC5 (PKI container ACL), ESC7 (CA officer rights), ESC9 (no-security-ext), ESC13 (OIDToGroupLink), ESC15 (EKUwu/CVE-2024-49019)"
     category    = "cve"
     in_default_run = True
 
@@ -117,6 +166,11 @@ class AdcsExtended(Module):
         if ctx.domain_sid:
             public_sids.add(f"{ctx.domain_sid}-513")
 
+        # Collect every non-default write-trustee SID across all
+        # templates / containers / CAs so the resolve_sids call below
+        # batches name lookups instead of hitting the DC per-finding.
+        all_write_sids: set[str] = set()
+
         for tpl in templates:
             tpl_name = attr(tpl, "cn") or attr(tpl, "displayName") or "<unknown>"
             tpl_dn   = attr(tpl, "distinguishedName") or ""
@@ -124,13 +178,22 @@ class AdcsExtended(Module):
             enroll_flag = _to_int(attr(tpl, "msPKI-Enrollment-Flag")) or 0
             policy_oids = [str(p) for p in attrs(tpl, "msPKI-Certificate-Policy")]
 
-            # Walk the template's DACL once for all three checks.
+            # Walk the template's DACL once for both enrolment-rights
+            # collection (ESC9/13/15 inputs) AND the ESC4 write-ACL audit.
             sd = parse_sd(attr(tpl, "nTSecurityDescriptor"))
             enrolment_trustees: set[str] = set()
+            esc4_writers:    list[dict] = []
             if sd is not None:
                 for ace in walk_aces(sd, object_dn=tpl_dn):
                     if self._grants_enrolment(ace):
                         enrolment_trustees.add(ace.trustee_sid)
+                    write_class = _classify_write_ace(ace)
+                    if write_class and not is_well_known_privileged(ace.trustee_sid):
+                        esc4_writers.append({
+                            "trustee_sid": ace.trustee_sid,
+                            **write_class,
+                        })
+                        all_write_sids.add(ace.trustee_sid)
 
             public_enrolable = bool(enrolment_trustees & public_sids)
 
@@ -142,11 +205,46 @@ class AdcsExtended(Module):
                 "policy_oids":      policy_oids,
                 "enrolment_trustees": sorted(enrolment_trustees),
                 "public_enrolable": public_enrolable,
+                "esc4":             bool(esc4_writers),
+                "esc4_writers":     esc4_writers,
                 "esc9":             False,
                 "esc13":            False,
                 "esc15":            False,
                 "esc13_groups":     [],
             }
+
+            # ── ESC4 ───────────────────────────────────────────────
+            for writer in esc4_writers:
+                findings.append(Finding(
+                    target=tpl_name,
+                    attack=f"AD CS ESC4: {writer['label']} on template",
+                    severity=writer["severity"],
+                    priority=writer["priority"],
+                    reason=(
+                        f"Non-default principal {writer['trustee_sid']} "
+                        f"holds {writer['label']} on template '{tpl_name}'. "
+                        f"They can rewrite the template DACL or modify "
+                        f"enrol-by-name flags → convert any template into "
+                        f"an ESC1 (subject-supplied SAN) backdoor."
+                    ),
+                    next_step=(
+                        f"# As the writer principal, modify the template:\n"
+                        f"certipy template -u <writer>@{ctx.domain} -p <pass> "
+                        f"-template '{tpl_name}' -save-old\n"
+                        f"# Or via dacledit:\n"
+                        f"dacledit.py -action write -rights FullControl "
+                        f"-principal <writer> -target-dn '{tpl_dn}' "
+                        f"{ctx.domain}/<op>:<pass>"
+                    ),
+                    category="cve",
+                    mitre="T1649",
+                    data={
+                        "template_dn":   tpl_dn,
+                        "writer_sid":    writer["trustee_sid"],
+                        "right":         writer["label"],
+                        "domain_sid":    ctx.domain_sid,
+                    },
+                ))
 
             # ── ESC9 ───────────────────────────────────────────────
             if (enroll_flag & CT_FLAG_NO_SECURITY_EXTENSION) and public_enrolable:
@@ -249,32 +347,251 @@ class AdcsExtended(Module):
 
             per_template.append(row)
 
-        # Resolve the trustee SIDs for the raw output so the operator
-        # can read it without a SID-translation tool.
+        # ── ESC5 — PKI container DACL audit ────────────────────
+        esc5_rows, esc5_findings = self._audit_pki_containers(ctx, all_write_sids)
+        findings.extend(esc5_findings)
+
+        # ── ESC7 — CA officer rights ───────────────────────────
+        ca_rows, esc7_findings, esc7_writer_sids = self._audit_ca_officer_rights(ctx)
+        findings.extend(esc7_findings)
+        all_write_sids.update(esc7_writer_sids)
+
+        # Resolve every collected trustee SID (enrolment + ESC4 + ESC5
+        # + ESC7) in one batched LDAP query so the per-finding name
+        # rendering doesn't fan out.
         all_trustees = {sid for row in per_template for sid in row["enrolment_trustees"]}
+        all_trustees.update(all_write_sids)
         names = resolve_sids(ctx.ldap, all_trustees, ctx.base_dn) if all_trustees else {}
         for row in per_template:
             row["enrolment_trustee_names"] = [
                 names.get(sid, {}).get("sAMAccountName") or sid
                 for sid in row["enrolment_trustees"]
             ]
+            row["esc4_writer_names"] = [
+                names.get(w["trustee_sid"], {}).get("sAMAccountName") or w["trustee_sid"]
+                for w in row["esc4_writers"]
+            ]
+        # Patch the reason / data of every finding that referenced a
+        # SID — the friendly name is more useful for operators reading
+        # the JSON / terminal output.
+        for f in findings:
+            wsid = (f.data or {}).get("writer_sid")
+            if wsid:
+                friendly = names.get(wsid, {}).get("sAMAccountName") or wsid
+                f.data["writer_sam"] = friendly
+                f.reason = f.reason.replace(wsid, friendly)
 
         summary = {
-            "templates_total": len(per_template),
-            "esc9_count":      sum(1 for r in per_template if r["esc9"]),
-            "esc13_count":     sum(1 for r in per_template if r["esc13"]),
-            "esc15_count":     sum(1 for r in per_template if r["esc15"]),
+            "templates_total":   len(per_template),
+            "esc4_count":        sum(1 for r in per_template if r["esc4"]),
+            "esc5_count":        sum(1 for r in esc5_rows if r["esc5"]),
+            "esc7_count":        sum(1 for r in ca_rows  if r["esc7"]),
+            "esc9_count":        sum(1 for r in per_template if r["esc9"]),
+            "esc13_count":       sum(1 for r in per_template if r["esc13"]),
+            "esc15_count":       sum(1 for r in per_template if r["esc15"]),
         }
 
         return ScanResult(
             raw={
-                "applicable":  True,
-                "templates":   per_template,
-                "oid_links":   oid_links,
-                "summary":     summary,
+                "applicable":     True,
+                "templates":      per_template,
+                "pki_containers": esc5_rows,
+                "ca_objects":     ca_rows,
+                "oid_links":      oid_links,
+                "summary":        summary,
             },
             findings=findings,
         )
+
+    # ------------------------------------------------------------------ #
+    #  ESC5 — PKI container ACL audit                                    #
+    # ------------------------------------------------------------------ #
+
+    def _audit_pki_containers(
+        self, ctx: ScanContext, all_write_sids: set[str]
+    ) -> tuple[list[dict], list[Finding]]:
+        """Walk DACLs on the three PKI container objects:
+          CN=Public Key Services,CN=Services,CN=Configuration
+          CN=Certificate Templates,CN=Public Key Services,...
+          CN=Enrollment Services,CN=Public Key Services,...
+
+        Anyone with WriteDACL/WriteOwner/GenericAll/GenericWrite on
+        these can re-DACL every template / register a rogue CA / etc.
+        """
+        if not hasattr(ctx.ldap, "query_config"):
+            return [], []
+
+        container_dns = [
+            f"CN=Public Key Services,CN=Services,CN=Configuration,{ctx.base_dn}",
+            f"CN=Certificate Templates,CN=Public Key Services,CN=Services,CN=Configuration,{ctx.base_dn}",
+            f"CN=Enrollment Services,CN=Public Key Services,CN=Services,CN=Configuration,{ctx.base_dn}",
+        ]
+
+        rows:     list[dict] = []
+        findings: list[Finding] = []
+
+        for cdn in container_dns:
+            entries = ctx.ldap.query(
+                search_filter="(objectClass=*)",
+                attributes=["distinguishedName", "nTSecurityDescriptor"],
+                search_base=cdn,
+                controls=sd_control(),
+            )
+            if not entries:
+                continue
+            e = entries[0]
+            sd = parse_sd(attr(e, "nTSecurityDescriptor"))
+            writers: list[dict] = []
+            if sd is not None:
+                for ace in walk_aces(sd, object_dn=cdn):
+                    cls = _classify_write_ace(ace)
+                    if cls and not is_well_known_privileged(ace.trustee_sid):
+                        writers.append({"trustee_sid": ace.trustee_sid, **cls})
+                        all_write_sids.add(ace.trustee_sid)
+            rows.append({
+                "container_dn": cdn,
+                "esc5":         bool(writers),
+                "writers":      writers,
+            })
+            container_label = cdn.split(",")[0].replace("CN=", "")
+            for w in writers:
+                findings.append(Finding(
+                    target=container_label,
+                    attack=f"AD CS ESC5: {w['label']} on PKI container",
+                    severity=w["severity"],
+                    priority=w["priority"],
+                    reason=(
+                        f"Non-default principal {w['trustee_sid']} holds "
+                        f"{w['label']} on the PKI container '{container_label}'. "
+                        f"This grants effective control over every certificate "
+                        f"template / CA / enrolment service registered there — "
+                        f"convert into ESC4 against any template, or register a "
+                        f"rogue Enrollment Service entry."
+                    ),
+                    next_step=(
+                        f"# Confirm with certipy / dacledit:\n"
+                        f"dacledit.py -action read -target-dn '{cdn}' "
+                        f"{ctx.domain}/<op>:<pass>\n"
+                        f"# As the writer, re-DACL a template:\n"
+                        f"certipy template -u <writer>@{ctx.domain} -p <pass> "
+                        f"-template <name> -save-old"
+                    ),
+                    category="cve",
+                    mitre="T1649",
+                    data={
+                        "container_dn": cdn,
+                        "writer_sid":   w["trustee_sid"],
+                        "right":        w["label"],
+                        "domain_sid":   ctx.domain_sid,
+                    },
+                ))
+        return rows, findings
+
+    # ------------------------------------------------------------------ #
+    #  ESC7 — CA officer rights                                          #
+    # ------------------------------------------------------------------ #
+
+    def _audit_ca_officer_rights(
+        self, ctx: ScanContext
+    ) -> tuple[list[dict], list[Finding], set[str]]:
+        """Walk DACLs on every pKIEnrollmentService (CA) object. Look
+        for non-admin principals with ManageCA or ManageCertificates
+        extended rights — those are CA officers who can take over the
+        CA or approve their own pending certs."""
+        if not hasattr(ctx.ldap, "query_config"):
+            return [], [], set()
+
+        cas = ctx.ldap.query_config(
+            search_filter="(objectClass=pKIEnrollmentService)",
+            attributes=["cn", "displayName", "distinguishedName",
+                        "nTSecurityDescriptor"],
+        )
+
+        rows:     list[dict] = []
+        findings: list[Finding] = []
+        writer_sids: set[str] = set()
+
+        for ca in cas:
+            ca_name = attr(ca, "cn") or attr(ca, "displayName") or "<CA>"
+            ca_dn   = attr(ca, "distinguishedName") or ""
+            sd      = parse_sd(attr(ca, "nTSecurityDescriptor"))
+            # Coalesce by trustee SID — one principal can hold ManageCA
+            # and ManageCertificates as two separate ACEs and we need to
+            # see them together to escalate to CRITICAL.
+            officers_by_sid: dict[str, set[str]] = {}
+            if sd is not None:
+                for ace in walk_aces(sd, object_dn=ca_dn):
+                    if is_well_known_privileged(ace.trustee_sid):
+                        continue
+                    if _grants_ca_extended_right(ace, EXT_RIGHT_MANAGE_CA):
+                        officers_by_sid.setdefault(ace.trustee_sid, set()).add("ManageCA")
+                    if _grants_ca_extended_right(ace, EXT_RIGHT_MANAGE_CERTIFICATES):
+                        officers_by_sid.setdefault(ace.trustee_sid, set()).add("ManageCertificates")
+
+            officers: list[dict] = []
+            for sid, rights_set in officers_by_sid.items():
+                # Stable order: ManageCA before ManageCertificates.
+                ordered = [r for r in ("ManageCA", "ManageCertificates") if r in rights_set]
+                officers.append({"trustee_sid": sid, "rights": ordered})
+                writer_sids.add(sid)
+
+            rows.append({
+                "ca_name":  ca_name,
+                "ca_dn":    ca_dn,
+                "esc7":     bool(officers),
+                "officers": officers,
+            })
+
+            for off in officers:
+                # Both rights together = full CA admin (the worst case).
+                # Either alone is still an ESC7 path (officer can issue
+                # certs to themselves / approve pending → ESC4-style).
+                both = len(off["rights"]) == 2
+                severity = "CRITICAL" if both else "HIGH"
+                priority = 94 if both else 85
+                findings.append(Finding(
+                    target=ca_name,
+                    attack=f"AD CS ESC7: CA officer rights ({', '.join(off['rights'])})",
+                    severity=severity,
+                    priority=priority,
+                    reason=(
+                        f"Non-default principal {off['trustee_sid']} holds "
+                        f"{', '.join(off['rights'])} on CA '{ca_name}'. "
+                        + (
+                            "Combined rights = full CA administrator — can "
+                            "issue arbitrary certs, change templates, take "
+                            "ownership of the CA."
+                            if both else
+                            "ManageCA alone permits modifying CA configuration "
+                            "and adding officers — escalate by granting yourself "
+                            "ManageCertificates, then issue arbitrary certs."
+                            if "ManageCA" in off["rights"] else
+                            "ManageCertificates alone permits issuing certs "
+                            "for any pending request and re-issuing rejected "
+                            "ones — convert into ESC4 against any template."
+                        )
+                    ),
+                    next_step=(
+                        f"# Issue a cert for any UPN as CA officer:\n"
+                        f"certipy ca -u <officer>@{ctx.domain} -p <pass> "
+                        f"-ca '{ca_name}' -issue-cert <reqid> "
+                        f"-dc-ip {ctx.dc_ip}\n"
+                        f"# Or take over the CA:\n"
+                        f"certipy ca -u <officer>@{ctx.domain} -p <pass> "
+                        f"-ca '{ca_name}' -add-officer <officer> "
+                        f"-dc-ip {ctx.dc_ip}"
+                    ),
+                    category="cve",
+                    mitre="T1649",
+                    data={
+                        "ca_name":     ca_name,
+                        "ca_dn":       ca_dn,
+                        "writer_sid":  off["trustee_sid"],
+                        "rights":      off["rights"],
+                        "domain_sid":  ctx.domain_sid,
+                    },
+                ))
+        return rows, findings, writer_sids
 
     # ------------------------------------------------------------------ #
     #  Fetchers                                                          #
