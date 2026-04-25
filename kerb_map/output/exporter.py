@@ -1,5 +1,5 @@
 """
-Export — JSON and BloodHound-compatible output writers.
+Export — JSON and BloodHound-Lite output writers.
 """
 
 import datetime
@@ -31,12 +31,17 @@ class JSONExporter:
         log.success(f"JSON report written → {out.resolve()}")
 
 
-class BloodHoundExporter:
+class BloodHoundLiteExporter:
     """
-    Writes a BloodHound-compatible JSON file with custom nodes/edges
-    for delegation and Kerberoastable accounts.
-    BloodHound ingests nodes of type: User, Computer, Group, Domain.
-    Custom edges we add: Kerberoastable, ASREPRoastable, AllowedToDelegate.
+    Writes a *custom* BloodHound-style JSON file — NOT ingestible into
+    BloodHound CE, BloodHound 4.x, or BloodHound 5.x as-is.
+
+    The output uses ``DOMAIN\\account`` strings as ObjectIdentifiers, which
+    BloodHound CE rejects (it requires S-1-5-21-... domain SIDs). There
+    are also no separate users/computers/groups/domains files, no edges,
+    and the meta block is non-conformant. Treat this as kerb-map's own
+    serialisation format for re-ingestion via ``--show-scan``; a real
+    BH-CE-compatible exporter is tracked as the brief's §1.6 option (a).
     """
 
     def export(self, data: dict[str, Any], path: str) -> None:
@@ -194,4 +199,8 @@ class BloodHoundExporter:
         with out.open("w") as f:
             json.dump(bh, f, indent=2, default=_default)
 
-        log.success(f"BloodHound JSON written → {out.resolve()} ({len(nodes)} nodes)")
+        log.success(
+            f"BloodHound-Lite JSON written → {out.resolve()} "
+            f"({len(unique_nodes)} nodes — note: not BloodHound-CE ingestible, "
+            f"see exporter docstring)"
+        )

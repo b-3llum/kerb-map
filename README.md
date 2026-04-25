@@ -38,7 +38,9 @@ A full user manual covering all modules, CVE detection methods, detection profil
     --hygiene      Defensive posture audit (krbtgt age, LAPS coverage,
                    SID History, FGPP, credential exposure, stale machines...)
     --aggressive   Enable RPC probes (louder — Event 5145)
-    -o json        Export results to JSON or BloodHound format
+    -o json        Export results to JSON or BloodHound-Lite format
+                   (bloodhound-lite is a custom JSON shape — NOT
+                    BloodHound-CE ingestible; see exporter docstring)
 
 ---
 
@@ -166,7 +168,7 @@ kerb-map --show-scan 3
 | `--hygiene` | Defensive hygiene audit (LAPS, krbtgt, SID History, FGPP, stale accounts) |
 | `--aggressive` | Enable RPC CVE probes — generates Windows Event 5145 |
 | `--stealth` | Add random jitter between LDAP queries |
-| `-o json / bloodhound` | Write results to file |
+| `-o json / bloodhound-lite` | Write results to file. `bloodhound-lite` is kerb-map's own JSON shape — **not** ingestible into BloodHound CE / 4.x / 5.x as-is. |
 | `--top N` | Show top N priority targets (default 15) |
 | `--no-cache` | Do not save to local SQLite database |
 | `--timeout N` | LDAP connection timeout in seconds (default: 10) |
