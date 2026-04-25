@@ -20,15 +20,16 @@ jobs:
           python -m pip install --upgrade pip
           pip install -e '.[dev]'
 
-      # Coverage gate is set to 50 — current baseline is ~57%. Brief §6
-      # targets 60% for v1.2 final acceptance; this floor is just the
-      # regression guard so a PR that drops coverage by 7+ points fails CI.
+      # Coverage scoped to kerb_map.modules/ — the brief §6 v1.2
+      # acceptance target ("≥60% coverage on kerb_map/modules/").
+      # Baseline is ~69%; gate at 65 to leave a regression margin
+      # without false-failing on a small refactor.
       - name: pytest --cov
         run: |
           pytest \
-            --cov=kerb_map \
+            --cov=kerb_map.modules \
             --cov-report=term-missing \
-            --cov-fail-under=50
+            --cov-fail-under=65
 
       # Argparse smoke — catches "your CLI doesn't even import" regressions
       # that no unit test would notice.
