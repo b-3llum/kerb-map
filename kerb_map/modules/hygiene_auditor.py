@@ -43,12 +43,19 @@ BUILTIN_PRIVILEGED = {
     "551": "Backup Operators",
 }
 
-# Patterns that suggest credentials in text fields
+# Patterns that suggest credentials in text fields. The ``pw`` /
+# ``key`` shorthands are the field-bug additions: a real lab seed
+# carried "SQL svc — pw=Spring2024! rotate quarterly" and the audit
+# silently missed it because neither ``pass`` nor ``pwd`` matches
+# the bare ``pw=`` abbreviation that ops actually use in description
+# fields.
 CREDENTIAL_PATTERNS = [
     re.compile(r"\bpass(?:word|wd|wrd)?\s*[:=]\s*\S+", re.IGNORECASE),
     re.compile(r"\bpwd\s*[:=]\s*\S+", re.IGNORECASE),
+    re.compile(r"\bpw\s*[:=]\s*\S+", re.IGNORECASE),
     re.compile(r"\bcred(?:ential)?s?\s*[:=]\s*\S+", re.IGNORECASE),
     re.compile(r"\bsecret\s*[:=]\s*\S+", re.IGNORECASE),
+    re.compile(r"\bkey\s*[:=]\s*\S+", re.IGNORECASE),
     re.compile(r"\bpin\s*[:=]\s*\d{4,}", re.IGNORECASE),
 ]
 
@@ -395,8 +402,22 @@ class HygieneAuditor:
 
     def _credential_exposure(self) -> list[dict]:
         log.info("Scanning for credentials in description/info fields...")
+        # LDAP-side substring prefilter — the regex set above is the
+        # authoritative gate, this just cuts the candidate set.
+        # Field bug from a lab seed: the previous filter only caught
+        # `*pass*` / `*pwd*` / `*cred*`, missing the bare `pw=` / `secret:`
+        # / `pin=` / `key=` shorthand operators actually use in
+        # description fields. Substring matches like "secretary" /
+        # "key holder" are rejected by the downstream regex.
         entries = self.ldap.query(
-            search_filter="(&(objectClass=user)(|(description=*pass*)(description=*pwd*)(description=*cred*)(info=*pass*)(info=*pwd*)))",
+            search_filter=(
+                "(&(objectClass=user)"
+                "(|(description=*pass*)(description=*pwd*)(description=*pw=*)"
+                "(description=*cred*)(description=*secret*)(description=*pin*)"
+                "(description=*key*)"
+                "(info=*pass*)(info=*pwd*)(info=*pw=*)"
+                "(info=*cred*)(info=*secret*)(info=*pin*)(info=*key*)))"
+            ),
             attributes=["sAMAccountName", "description", "info",
                          "distinguishedName", "adminCount"],
         )
