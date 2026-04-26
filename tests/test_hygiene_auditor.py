@@ -426,20 +426,37 @@ def test_adminsdholder_no_admins_returns_empty():
     assert HygieneAuditor(ldap)._adminsdholder_orphans() == []
 
 
+def _adminsd_responses(admin_entry, *, da_dn=None, domain_sid="S-1-5-21-10-20-30"):
+    """Build the LDAP response queue the SID-based protected-group
+    resolver consumes. Order: admin-entries → domainDNS (for domain
+    SID prefix) → 8 domain-RID dn lookups → 6 builtin-RID dn lookups.
+    Pass ``da_dn`` to make the Domain Admins (RID 512) lookup return
+    a match — used to test the suppression path."""
+    responses = [
+        [admin_entry],                                  # admin_entries query
+        [_entry({"objectSid": domain_sid})],            # _get_domain_sid
+    ]
+    # 8 domain RIDs (512, 519, 518, 520, 526, 527, 516, 521) — first
+    # is Domain Admins.
+    if da_dn:
+        responses.append([_entry({"distinguishedName": da_dn})])  # 512=DA
+    else:
+        responses.append([])
+    responses.extend([[]] * 7)                          # 519, 518, 520, ...
+    # 6 builtin RIDs (544, 548, 549, 550, 551, 552)
+    responses.extend([[]] * 6)
+    return responses
+
+
 def test_adminsdholder_orphan_flagged_when_no_protected_membership():
     """An adminCount=1 user with no membership in any protected group
     is the classic "stale flag" or "compromised, then group-yanked"
     pattern. Pin HIGH so it shows up in defender reports."""
-    ldap = _LDAP(query_responses=[
-        # admin entries
-        [_entry({
-            "sAMAccountName":    "admin_orphan",
-            "memberOf":          [],
-            "distinguishedName": "CN=admin_orphan,CN=Users,DC=corp,DC=local",
-        })],
-        # protected-group lookups (one per group; return empty so the set is empty)
-        *([[]] * 11),
-    ])
+    ldap = _LDAP(query_responses=_adminsd_responses(_entry({
+        "sAMAccountName":    "admin_orphan",
+        "memberOf":          [],
+        "distinguishedName": "CN=admin_orphan,CN=Users,DC=corp,DC=local",
+    })))
     findings = HygieneAuditor(ldap)._adminsdholder_orphans()
     assert len(findings) == 1
     assert findings[0]["risk"] == "HIGH"
@@ -448,39 +465,58 @@ def test_adminsdholder_orphan_flagged_when_no_protected_membership():
 
 def test_adminsdholder_membership_in_protected_group_suppresses():
     da_dn = "CN=Domain Admins,CN=Users,DC=corp,DC=local"
-    responses = [
-        # admin entries — bob_da is in Domain Admins
-        [_entry({
-            "sAMAccountName":    "bob_da",
-            "memberOf":          [da_dn],
-            "distinguishedName": "CN=bob_da,CN=Users,DC=corp,DC=local",
-        })],
-    ]
-    # 11 protected-group lookups; only "Domain Admins" returns a match
-    for name in ["Domain Admins", "Enterprise Admins", "Schema Admins",
-                 "Administrators", "Account Operators", "Server Operators",
-                 "Print Operators", "Backup Operators", "Replicator",
-                 "Domain Controllers", "Read-only Domain Controllers"]:
-        if name == "Domain Admins":
-            responses.append([_entry({"distinguishedName": da_dn})])
-        else:
-            responses.append([])
-    ldap = _LDAP(query_responses=responses)
+    ldap = _LDAP(query_responses=_adminsd_responses(_entry({
+        "sAMAccountName":    "bob_da",
+        "memberOf":          [da_dn],
+        "distinguishedName": "CN=bob_da,CN=Users,DC=corp,DC=local",
+    }), da_dn=da_dn))
     findings = HygieneAuditor(ldap)._adminsdholder_orphans()
     assert findings == []
 
 
+def test_adminsdholder_works_on_localized_ad_via_sid_lookup():
+    """Field bug regression: previously the protected-group lookup
+    used ``(cn=Domain Admins)`` and returned nothing on a German AD
+    (``Domänen-Admins``) — every adminCount=1 user was reported as
+    orphan. The SID-based lookup is locale-portable: ``S-1-5-21-...
+    -512`` is the same group regardless of UI translation. Pin that
+    a Localized DN (anything not matching the English CN) is still
+    correctly recognised as Domain Admins."""
+    localized_da_dn = "CN=Domänen-Admins,CN=Users,DC=corp,DC=local"
+    ldap = _LDAP(query_responses=_adminsd_responses(_entry({
+        "sAMAccountName":    "bob_da",
+        "memberOf":          [localized_da_dn],
+        "distinguishedName": "CN=bob_da,CN=Users,DC=corp,DC=local",
+    }), da_dn=localized_da_dn))
+    findings = HygieneAuditor(ldap)._adminsdholder_orphans()
+    assert findings == []   # NOT flagged as orphan
+
+
 # ─────────────────────────────────── _fgpp_audit ─
+
+
+def _fgpp_responses(*policy_entries, da_dn=None, domain_sid="S-1-5-21-10-20-30"):
+    """FGPP audit query order: PSO query → domainDNS (for SID prefix)
+    → 3 domain-RID lookups (512, 519, 518) → 1 builtin-RID lookup (544)."""
+    responses = [
+        list(policy_entries),
+        [_entry({"objectSid": domain_sid})],
+    ]
+    # 3 domain RIDs, 512=DA first
+    if da_dn:
+        responses.append([_entry({"distinguishedName": da_dn})])
+    else:
+        responses.append([])
+    responses.extend([[]] * 2)   # 519, 518
+    responses.append([])         # 544 BUILTIN\Administrators
+    return responses
 
 
 def test_fgpp_no_policies_is_high():
     """No FGPP defined at all → all accounts use domain default. HIGH
     because privileged accounts are stuck on the same policy as
     everyone else."""
-    ldap = _LDAP(query_responses=[
-        [],            # FGPP query
-        *([[]] * 4),   # privileged-group lookups
-    ])
+    ldap = _LDAP(query_responses=_fgpp_responses())
     result = HygieneAuditor(ldap)._fgpp_audit()
     assert result["risk"] == "HIGH"
     assert result["policy_count"] == 0
@@ -490,9 +526,8 @@ def test_fgpp_no_policies_is_high():
 def test_fgpp_policy_not_covering_privileged_is_medium():
     pso_dn = "CN=Default-PSO,CN=Password Settings Container,..."
     da_dn  = "CN=Domain Admins,CN=Users,DC=corp,DC=local"
-    ldap = _LDAP(query_responses=[
-        # FGPP query
-        [_entry({
+    ldap = _LDAP(query_responses=_fgpp_responses(
+        _entry({
             "cn":                              "Default-PSO",
             "msDS-MinimumPasswordLength":      14,
             "msDS-MaximumPasswordAge":         None,
@@ -500,13 +535,9 @@ def test_fgpp_policy_not_covering_privileged_is_medium():
             "msDS-LockoutThreshold":           5,
             "msDS-PSOAppliesTo":               [pso_dn],   # not the DA group
             "msDS-PasswordSettingsPrecedence": 10,
-        })],
-        # privileged-group lookups
-        [_entry({"distinguishedName": da_dn})],
-        [],
-        [],
-        [],
-    ])
+        }),
+        da_dn=da_dn,
+    ))
     result = HygieneAuditor(ldap)._fgpp_audit()
     assert result["policy_count"] == 1
     assert result["policies"][0]["min_length"] == 14
@@ -518,8 +549,8 @@ def test_fgpp_policy_not_covering_privileged_is_medium():
 
 def test_fgpp_policy_covering_privileged_is_low():
     da_dn = "CN=Domain Admins,CN=Users,DC=corp,DC=local"
-    ldap = _LDAP(query_responses=[
-        [_entry({
+    ldap = _LDAP(query_responses=_fgpp_responses(
+        _entry({
             "cn":                              "DA-PSO",
             "msDS-MinimumPasswordLength":      20,
             "msDS-MaximumPasswordAge":         None,
@@ -527,12 +558,9 @@ def test_fgpp_policy_covering_privileged_is_low():
             "msDS-LockoutThreshold":           3,
             "msDS-PSOAppliesTo":               [da_dn],
             "msDS-PasswordSettingsPrecedence": 1,
-        })],
-        [_entry({"distinguishedName": da_dn})],
-        [],
-        [],
-        [],
-    ])
+        }),
+        da_dn=da_dn,
+    ))
     result = HygieneAuditor(ldap)._fgpp_audit()
     assert result["privileged_covered"] is True
     assert result["risk"] == "LOW"
@@ -542,8 +570,8 @@ def test_fgpp_handles_null_attribute_values():
     """Samba-provisioned default PSOs sometimes ship with null
     complexity / min-length attributes — treat them as 0 / False
     rather than crashing."""
-    ldap = _LDAP(query_responses=[
-        [_entry({
+    ldap = _LDAP(query_responses=_fgpp_responses(
+        _entry({
             "cn":                              "Empty-PSO",
             "msDS-MinimumPasswordLength":      None,
             "msDS-MaximumPasswordAge":         None,
@@ -551,9 +579,8 @@ def test_fgpp_handles_null_attribute_values():
             "msDS-LockoutThreshold":           None,
             "msDS-PSOAppliesTo":               [],
             "msDS-PasswordSettingsPrecedence": None,
-        })],
-        *([[]] * 4),
-    ])
+        }),
+    ))
     result = HygieneAuditor(ldap)._fgpp_audit()
     pol = result["policies"][0]
     assert pol["min_length"] == 0
