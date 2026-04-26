@@ -2,6 +2,138 @@
 
 All notable changes to kerb-map will be documented in this file.
 
+## [1.2.1] — 2026-04
+
+Lab-driven iteration release. Stand up a Samba 4 AD lab, ingest into a
+real BloodHound CE 5.x instance, and watch what breaks — every change
+below is something the lab forced into the open.
+
+### Added — BloodHound CE 5.x: real graph edges from KerbMap findings (#39, #40)
+
+- **`_kerbmap_metadata.json` sidecar** — kerb-map findings ship in the
+  same zip but under an underscore-prefixed name BH CE skips during
+  ingest. Replaces the previous `kerbmap_edges.json` shape, which BH
+  CE 5.x rejected with HTTP 500 + "no valid meta tag found", killing
+  the *entire* upload (not just the sidecar). Field-bug-validated
+  against a running BH CE 5.x docker compose stack.
+- **Per-node `Aces` folding** — three finding classes now fold into the
+  target node's `Aces` array with SharpHound-recognised `RightName`s,
+  so they render as native BH CE edges in the graph (previously
+  sidecar-only). Operator pathfinding works without external tooling:
+  - `DCSync (full)` → Domain `Aces` with `GetChanges` + `GetChangesAll`
+  - `Shadow Credentials (write)` → User `Aces` with `AddKeyCredentialLink`
+  - `Tier-0 ACL: <right>` → target `Aces` with `GenericAll` /
+    `WriteDacl` / `WriteOwner` / `GenericWrite` / `AddMember` /
+    `AddSelf` (kerb-map's `WriteDACL` label maps to BH CE's `WriteDacl`
+    — without the case translation, BH CE silently skipped the edge.)
+- Sidecar entries carry `folded: bool` so kerb-chain knows which
+  findings render in the graph and which don't (ADCS templates, OUs,
+  dMSAs need node-type enumeration that's a v1.3 follow-up).
+- `COLLECTOR_VERSION` bumped to `2.1.0-aces-fold`.
+
+End-to-end validated against the lab's seeded vulns: `ACCOUNT
+OPERATORS → BOB_DA` Tier-0 takeover is now a 1-hop graph edge;
+`HELPDESK_OP → BOB_DA` Shadow Creds is a `AddKeyCredentialLink`
+edge; `SVC_OLD_ADMIN → LAB.LOCAL` is a full DCSync (both edges).
+
+### Added — GPP cpassword auto-decrypt (#41 — closes gap #9)
+
+- **GPPPasswords now SMB-greps SYSVOL** when credentials are
+  available, decrypts `cpassword=` with the MS-published AES-256 key
+  (PKCS#7-padded, UTF-16-LE), extracts the sibling `userName=`, and
+  returns CRITICAL with the cleartext credential. Previously honest-
+  INDETERMINATE since PR #30 — operators had to grep manually with
+  smbclient or Get-GPPPassword.
+- **CVEBase carries optional credentials** (keyword-only:
+  `username` / `password` / `nthash` / `use_kerberos`). CVEScanner
+  forwards them to every check; only GPPPasswords uses them today,
+  but the plumbing is the same one any future SMB- or RPC-touching
+  CVE check would need. Existing 3-arg `CVEBase(ldap, dc_ip, domain)`
+  call sites unchanged.
+- Without credentials (kerberos-only without GSSAPI-on-SMB plumbing,
+  anonymous bind), the check falls through to the prior
+  INDETERMINATE behaviour — opt-in, no behavior change for users
+  without `-p` / `-H`.
+- `cryptography` is **not** a new dep — `pycryptodomex` is a hard
+  impacket dep so it's guaranteed importable wherever kerb-map runs.
+
+End-to-end validated against the lab: with a seeded `Groups.xml`
+containing `Password1!` encrypted via the public key, kerb-map
+reports `CRITICAL  GPP Passwords (cpassword) (MS14-025) — user='helpdesk_admin', cleartext=***. patch_status: confirmed vulnerable via SMB-grep`.
+
+### Fixed — field bugs surfaced by lab + BH CE iteration
+
+- **impacket `openFile` + `readFile` take a numeric `treeId`** (from
+  `connectTree`); passing the share name string returned zero bytes
+  silently. Switched GPP's `_read_file` to `getFile` which takes the
+  share name directly. (#41)
+- **Samba's domain provision creates `MACHINE/` (uppercase)** under
+  each GPO; the lab seed wrote to `Machine/` — Linux's case-sensitive
+  filesystem made these distinct directories. Fixed by writing into
+  the existing MACHINE; GPP walker is also case-insensitive on
+  filenames so it survives either capitalisation. (#41)
+- **GPP username extraction matched `newName=""`** before
+  `userName="..."` because `newName` appears earlier in the GPP
+  attribute list — operator-facing finding read `user='<unknown>'`
+  even with the username right there. Fixed by ranking patterns
+  (`userName` > `accountName` > `runAs` > `newName`) and skipping
+  empty matches. (#41)
+- **`da_alice` missing `adminCount=1` pin** in the lab seed — same
+  class as the existing `bob_da` fix: Samba's AdminSDHolder runs
+  every 60min, so freshly-added Domain Admins members miss the first
+  scan. Without the pin, Shadow Credentials inventory (which only
+  reports `adminCount=1`) silently misses the seeded KCL — exactly
+  the CRITICAL finding the seed exists to validate. (#39)
+
+### Added — Samba 4 lab compatibility (#37, #38)
+
+- **LDAPS-SIMPLE transport** added to the LDAP fallback chain
+  (LDAPS → StartTLS → SASL/Kerberos → LDAPS-SIMPLE → plain). Samba's
+  LDAP service rejects NTLM-flavoured binds with
+  "session terminated by server"; SIMPLE bind over the same TLS
+  socket succeeds. Pass-the-hash callers skip LDAPS-SIMPLE because
+  SIMPLE bind needs the plaintext password.
+- **Lab seed end-to-end validation** against `vagrant up` from
+  scratch — `provision_dc.sh` + `seed_vulnerabilities.sh` stand up a
+  signing-relaxed Samba 4 AD with every v1 + v2 attack-surface seed
+  in ~5–10 min. Provision script gained `ldb-tools` to apt install
+  and `ldap server require strong auth = no` to smb.conf so the
+  field-typical Windows AD config is reproduced.
+- `delegation_mapper` no longer crashes when an entry has no
+  `dNSHostName` — `e.get(...)` doesn't exist on `ldap3.Entry`,
+  `"key" in e` does. Same class as the `walk_aces` `.get()` fix from
+  PR #32.
+
+### Added — CI matrix + coverage (#37)
+
+- CI now runs the suite on Python 3.10 / 3.11 / 3.12 (was 3.12 only)
+  via `.github/workflows/test.yml`. Locally verified with `uv` on
+  3.10 / 3.11 / 3.12 — no code changes needed.
+- `kerb_map/modules/` aggregate test coverage pushed from 69% to
+  **83%**. `hygiene_auditor.py` (663 LOC, 10 sub-modules) is the
+  remaining straggler at 13% — tracked as a v1.2.2 follow-up in
+  `docs/v1.2-known-gaps.md`.
+- New docs:
+  - `docs/v1.2-known-gaps.md` — honest scope-vs-shipped accounting,
+    11 gaps with the environment / work needed to close each. v1.2.1
+    closes gap #2 (BH CE ingest validation) and gap #9 (GPP SMB-grep).
+  - `docs/ARCHITECTURE.md`, `docs/MODULE_AUTHORING.md`,
+    `docs/ENGAGEMENT_GUIDE.md`.
+
+### Performance baseline (partial — #40 docs update)
+
+First numbers measured against the 1500-stub-user Samba lab:
+
+| Profile         | Wall time | Output zip |
+|-----------------|----------:|-----------:|
+| `--all` legacy  |     3.6 s |       60 MB |
+| `--all --v2`    |    10.2 s |      113 MB |
+
+`--v2` adds 2.8× wall time and 1.9× output size on this lab — driven
+by the 6 ACL-walking modules issuing `get_security_descriptor=True`
+LDAP queries. Real-estate scaling and tracemalloc instrumentation
+remain a v1.3 follow-up (gap #7).
+
 ## [1.2.0] — 2026-04
 
 ### Added — new no-creds attacks
