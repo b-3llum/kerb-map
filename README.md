@@ -4,11 +4,87 @@
 
 **Active Directory Kerberos Attack Surface Mapper**
 
-![version](https://img.shields.io/badge/version-1.2.0-blue)
+![version](https://img.shields.io/badge/version-1.2.1-blue)
+![status](https://img.shields.io/badge/status-BETA-orange)
 ![python](https://img.shields.io/badge/python-3.10+-blue)
 ![platform](https://img.shields.io/badge/platform-Linux-lightgrey)
 ![license](https://img.shields.io/badge/license-MIT-lightgrey)
 [![Manual](https://img.shields.io/badge/Manual-View%20Online-blue)](https://docs.google.com/viewer?url=https://raw.githubusercontent.com/b-3llum/kerb-map/main/kerb-map-manual.docx)
+---
+
+## Status: BETA — read before pointing at production
+
+v1.2.1 is **code-feature-complete and lab-validated, not battle-tested**.
+The tool has been exercised against exactly two domains so far: one
+Server 2019 (the culling-game lab) and one Samba 4 vagrant lab.
+Each environment touched has surfaced 3–10 silent-failure bugs that
+the unit tests didn't catch (PRs #29–#42). Expect to find more on
+yours.
+
+Five things an operator should know before scanning a real estate:
+
+1. **Scale is untested.** Performance baseline comes from a 1500-stub
+   Samba lab — `--all` runs in 3.6s / 60 MB output, `--all --v2` in
+   10.2s / 113 MB. 5k+ user estates, multi-DC sites with referrals,
+   and forests with 50+ GPOs are unmeasured. `--v2`'s 2.8× wall-time
+   multiplier is dominated by ACL-walking modules; it may balloon on
+   ACE-rich production objects.
+
+2. **Hardened-LDAP partial:** *signing-required* estates work via
+   the LDAPS-SIMPLE fallback (PR #38) — TLS satisfies the strong-auth
+   check. Validated end-to-end against a Samba 4 DC with
+   `ldap server require strong auth = yes`: TLSv1.3 SIMPLE bind
+   succeeds and `--all` runs cleanly. *Channel-binding-required*
+   estates (Windows "LDAP server channel binding token requirements
+   = Always") are still untested — ldap3 doesn't generate CBT for
+   SIMPLE binds, so this likely fails and would need a real Windows
+   DC with the GPO set to confirm + fix.
+
+3. **Server 2022 / 2025 forests are unvalidated.** Lab is Server 2019
+   + Samba 4. Samba lacks the dMSA / Server-2025-only schema classes,
+   so the BadSuccessor module — the only Server 2025 attack surface
+   kerb-map covers — has never been exercised against a real Server
+   2025 DC. RODCs (UAC bit 0x4000000), Exchange-extended / ConfigMgr
+   schemas, and multi-domain forest trust walking are similarly
+   untested.
+
+4. **Detection profile is reasoned, not measured.** README's claims
+   about which Windows Event IDs / MDI alerts / EDR signatures
+   kerb-map trips are derived from LDAP query shape and protocol-level
+   reasoning. They have never been validated by sitting with a SOC
+   analyst watching Splunk / Sentinel / MDI during a run. Treat the
+   table as a hypothesis for engagement-noise budgeting, not as a
+   measurement.
+
+5. **BloodHound CE edge folding is partial.** 3 of 16 KerbMap finding
+   classes (DCSync, Shadow Credentials, Tier-0 ACL) fold into the
+   target node's `Aces` and render as native BH CE pathfinding
+   edges. The other 13 (ADCS Extended ESC4–15, BadSuccessor, OU
+   computer-create, gMSA reader, KDS root key, Pre-Win2k, etc.) ship
+   in a sidecar `_kerbmap_metadata.json` for kerb-chain / external
+   tooling but aren't graph-visible. Operators who pathfind only
+   through the BH UI will miss those finding classes — grep the
+   sidecar or open the JSON report.
+
+**What IS validated end-to-end against the lab:**
+
+- Every legacy + v2 module against the seeded Samba 4 lab (1500
+  users, every v1+v2 attack-surface vulnerability seeded)
+- BloodHound CE 5.x ingest against a running docker-compose stack
+  (Cypher-verified — Tier-0 paths render as 1-hop edges)
+- GPP cpassword decrypt against seeded SYSVOL XMLs (CRITICAL fires
+  with cleartext + username)
+- CI matrix on Python 3.10 / 3.11 / 3.12
+- 84%+ unit-test coverage on `kerb_map/modules/` (`hygiene_auditor`
+  at 100%)
+
+**Full scope-vs-shipped accounting:** `docs/v1.2-known-gaps.md`.
+
+**Found a bug?** Open an issue with the full `--v2 -vv` log + the
+DC's OS / functional level. The development pattern so far is "every
+new environment surfaces ~3–10 silent bugs"; that loop is open and
+the maintainer wants the data.
+
 ---
 
 ## Overview

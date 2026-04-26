@@ -669,6 +669,30 @@ def run_scan(args):
     domain_info = ldap.get_domain_info()
     print_domain_info(domain_info)
 
+    # Resume / partial-scan state (brief §3.8). Allocate BEFORE the
+    # SNTP probe so a Ctrl-C / network hiccup during the time-check
+    # still leaves a resumable scan-id on disk. Field bug from the
+    # v1.3 sprint: previously the order was LDAP-connect → SNTP probe
+    # (which can stall up to 5s on firewalled DCs) → ResumeState.new()
+    # — interrupting during SNTP discarded everything.
+    if args.resume:
+        resume_state = ResumeState.load(args.resume)
+        if resume_state is None:
+            log.error(f"No resumable scan matches '{args.resume}'. "
+                      f"Use --list-resumable to see candidates.")
+            sys.exit(1)
+        log.info(
+            f"Resuming scan {resume_state.scan_id} "
+            f"({resume_state.domain}, started {resume_state.started_at}). "
+            f"Skipping modules: {', '.join(resume_state.completed) or '(none)'}"
+        )
+    else:
+        resume_state = ResumeState.new(domain=args.domain)
+        log.info(
+            f"Scan id: [cyan]{resume_state.scan_id}[/cyan] — "
+            f"resume with --resume {resume_state.scan_id} if interrupted"
+        )
+
     # Clock skew check — Kerberos breaks at >5min skew with the DC, but
     # LDAP/NTLM doesn't, so without this warning the operator scans
     # cleanly then gets KRB_AP_ERR_SKEW from every Kerberos recipe in
@@ -698,27 +722,6 @@ def run_scan(args):
         dc_fqdn=domain_info.get("dc_dns_hostname"),
         base_dn=ldap.base_dn,
     )
-
-    # Resume / partial-scan state (brief §3.8). On --resume, load prior
-    # state from disk; otherwise start fresh and announce the scan-id
-    # so the operator can resume if the run gets interrupted.
-    if args.resume:
-        resume_state = ResumeState.load(args.resume)
-        if resume_state is None:
-            log.error(f"No resumable scan matches '{args.resume}'. "
-                      f"Use --list-resumable to see candidates.")
-            sys.exit(1)
-        log.info(
-            f"Resuming scan {resume_state.scan_id} "
-            f"({resume_state.domain}, started {resume_state.started_at}). "
-            f"Skipping modules: {', '.join(resume_state.completed) or '(none)'}"
-        )
-    else:
-        resume_state = ResumeState.new(domain=args.domain)
-        log.info(
-            f"Scan id: [cyan]{resume_state.scan_id}[/cyan] — "
-            f"resume with --resume {resume_state.scan_id} if interrupted"
-        )
 
     # ── Kerberoastable accounts ───────────────────────────────────
     spns = []

@@ -133,18 +133,26 @@ changetype: modify
 replace: userAccountControl
 userAccountControl: 2097664" || true
 
-# ─────────────────────────────────────── v1 — Paging (1500 stub users)
-# Bulk-create only on first seed (slow), skip if user1500 already exists.
-if ! ldap -b "${DOMAIN_BASE_DN}" "(sAMAccountName=user1500)" dn 2>/dev/null \
+# ─────────────────────────────────────── v1 — Paging (stub users)
+# Default 1500 stub users (above MaxPageSize=1000 so paging is exercised).
+# Override with STUB_COUNT=5000 to validate v1.3 scale-baseline numbers
+# against an estate the size of a small enterprise (~5k users).
+STUB_COUNT="${STUB_COUNT:-1500}"
+LAST_USER="user$(printf '%04d' "$STUB_COUNT")"
+if ! ldap -b "${DOMAIN_BASE_DN}" "(sAMAccountName=${LAST_USER})" dn 2>/dev/null \
         | grep -q '^dn:'; then
-    echo "[seed] creating 1500 stub users (one-time, ~2 min)…"
-    for i in $(seq 1 1500); do
+    echo "[seed] creating ${STUB_COUNT} stub users (slow path, ~$(( STUB_COUNT / 12 )) s)…"
+    # samba-tool spawns a fresh python interpreter per call — slow.
+    # Use ldbadd direct to /var/lib/samba/private/sam.ldb where possible
+    # (bypasses the password-policy validation that samba-tool runs, but
+    # these are stub accounts whose passwords nobody will use).
+    for i in $(seq 1 "$STUB_COUNT"); do
         st user create "user$(printf '%04d' "$i")" "$SEED_PASS" \
             --description="Stub user #$i" >/dev/null 2>&1 || true
     done
     echo "[seed] stub users done."
 else
-    echo "[seed] stub users already present, skipping bulk create."
+    echo "[seed] stub users already present (last=${LAST_USER}), skipping bulk create."
 fi
 
 # ─────────────────────────────────────── v2 — DCSync rights backdoor

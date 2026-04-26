@@ -286,6 +286,27 @@ class BloodHoundCEExporter:
                         "target_kind": data.get("target_kind"),
                     },
                 })
+            # ── User ACL audit (UserAclAudit module) ────────────
+            #
+            # Same edge type as Tier-0 ACL — both modules find DACL
+            # writers, just on different target sets (Tier-0 walks
+            # privileged accounts; User walks every enabled non-Tier-0
+            # user for lateral-movement edges). Field bug surfaced by
+            # the v1.3 sprint bug-class grep: user_acl findings used
+            # to be silently dropped from the export — neither folded
+            # into Aces nor present in the sidecar — because no branch
+            # matched ``attack.startswith("User ACL:")``.
+            elif attack.startswith("User ACL:") and data.get("writer_sid"):
+                target_id = data.get("target_sid") or data.get("target_dn") or ""
+                self._extra_edges.append({
+                    "source": data["writer_sid"],
+                    "target": target_id,
+                    "edge":   "KerbMapWriteAcl",
+                    "props":  {
+                        "right":       data.get("right"),
+                        "target_kind": "user",
+                    },
+                })
             # ── OU computer-create (OuComputerCreate module) ────
             #
             # The "post-MAQ-hardening RBCD pivot" edge — operators can

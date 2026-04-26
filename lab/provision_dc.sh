@@ -83,20 +83,25 @@ samba-tool domain provision                  \
     --use-rfc2307                            \
     --host-ip="$DC_IP"
 
-# Field bug from a `vagrant up` validation: Samba 4 default config
-# rejects unsigned LDAP binds with "strongerAuthRequired" — and ldap3
-# (kerb-map's LDAP layer) doesn't negotiate GSSAPI integrity layers
-# during SASL/Kerberos bind, so kerb-map can't authenticate against
-# default Samba at all. The fix in ldap3 is library-level and tracked
-# as a v1.2.x follow-up; for the lab we relax the default to match
-# typical Windows AD engagement targets (Server 2019/2022 with default
-# "LDAP server signing requirements = None"). The lab's purpose is
-# to seed *attack-surface* vulnerabilities (Kerberoast, AS-REP, RBCD,
-# Shadow Creds, DCSync) — not to prove kerb-map handles the
-# orthogonal "hardened LDAP" config.
-echo "
+# Default: relax LDAP signing to match typical Windows AD engagement
+# targets (Server 2019/2022 with default "LDAP server signing
+# requirements = None"). Set HARDENED_LDAP=1 to provision in
+# signing-required mode and validate kerb-map's LDAPS-SIMPLE fallback
+# end-to-end (the v1.3 sprint exercise — gap #1 from
+# docs/v1.2-known-gaps.md).
+#
+# Either way, kerb-map should bind: in permissive mode via NTLM-over-
+# LDAPS, in hardened mode via SIMPLE-over-LDAPS (PR #38 transport).
+# The hardened path was added but never validated against a Samba 4
+# DC actually configured for "require strong auth = yes" until now.
+if [ "${HARDENED_LDAP:-0}" = "1" ]; then
+    echo "[provision] HARDENED_LDAP=1 — leaving Samba's default 'require strong auth = yes'"
+    echo "[provision] kerb-map should bind via LDAPS-SIMPLE (PR #38 fallback)"
+else
+    echo "
 ldap server require strong auth = no
 " >> /etc/samba/smb.conf
+fi
 
 # Populate krb5.conf from the one Samba just wrote so kinit works
 # system-wide (so vagrant ssh users can `kinit Administrator` for

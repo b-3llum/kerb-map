@@ -445,6 +445,39 @@ def test_tier0_acl_finding_emits_kerbmap_writeacl_edge(tmp_path):
     assert edge["props"]["target_kind"] == "Privileged group"
 
 
+def test_user_acl_finding_emits_kerbmap_writeacl_edge(tmp_path):
+    """User ACL audit findings (lateral-movement edges between
+    non-Tier-0 users) must reach the export — same shape as Tier-0
+    ACL. Field bug from the v1.3 sprint bug-class grep: previously
+    the exporter only matched ``attack.startswith("Tier-0 ACL:")``
+    and silently dropped every User ACL finding from both the graph
+    and the sidecar. Operators using BH CE for lateral pathfinding
+    were getting the wrong picture."""
+    exp = _exporter()
+    exp.add_findings([Finding(
+        target="bob",
+        attack="User ACL: GenericAll → bob",
+        severity="HIGH", priority=85, reason="...",
+        data={
+            "writer_sid":  "S-1-5-21-10-20-30-1500",
+            "writer_sam":  "alice",
+            "writer_dn":   "CN=alice,...",
+            "target_sid":  "S-1-5-21-10-20-30-1600",
+            "target_dn":   "CN=bob,...",
+            "target_sam":  "bob",
+            "right":       "GenericAll",
+        },
+    )])
+    out = exp.export(str(tmp_path / "user_acl.zip"))
+    edges = _read_edges(out)
+    assert len(edges) == 1
+    assert edges[0]["edge"]   == "KerbMapWriteAcl"
+    assert edges[0]["source"] == "S-1-5-21-10-20-30-1500"
+    assert edges[0]["target"] == "S-1-5-21-10-20-30-1600"
+    assert edges[0]["props"]["right"]       == "GenericAll"
+    assert edges[0]["props"]["target_kind"] == "user"
+
+
 def test_tier0_acl_finding_uses_target_dn_when_no_sid(tmp_path):
     """AdminSDHolder doesn't have a useful SID — the edge attaches to
     the DN instead. Operators can resolve in BH via name match."""

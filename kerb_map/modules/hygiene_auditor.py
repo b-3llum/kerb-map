@@ -83,15 +83,28 @@ class HygieneResult:
     service_acct_hygiene: list[dict] = field(default_factory=list)
 
     def finding_count(self) -> int:
+        # Each of the dict-shaped sub-results (laps_coverage,
+        # krbtgt_age, fgpp_audit) needs a "the audit didn't run" guard
+        # before checking its threshold, otherwise an empty {} would
+        # be counted via the *default* — and the previous defaults
+        # were inconsistent (FGPP defaulted pessimistic = +1, LAPS
+        # / krbtgt defaulted optimistic = +0). Treat empty/missing
+        # data uniformly as "no audit data, no finding" so a partially
+        # constructed HygieneResult (test fixture, future
+        # partial-resume) doesn't silently report phantom findings.
         count = 0
         count += len(self.sid_history)
-        count += (0 if self.laps_coverage.get("coverage_pct", 100) >= 90 else 1)
-        count += (1 if self.krbtgt_age.get("age_days", 0) > 180 else 0)
+        if self.laps_coverage and self.laps_coverage.get("coverage_pct", 100) < 90:
+            count += 1
+        if self.krbtgt_age and self.krbtgt_age.get("age_days", 0) > 180:
+            count += 1
         count += len(self.adminsdholder_orphans)
-        count += (0 if self.fgpp_audit.get("privileged_covered") else 1)
+        if self.fgpp_audit and not self.fgpp_audit.get("privileged_covered"):
+            count += 1
         count += len(self.credential_exposure)
         count += len(self.primary_group_abuse)
-        count += (1 if len(self.stale_computers) > 0 else 0)
+        if self.stale_computers:
+            count += 1
         count += len(self.service_acct_hygiene)
         return count
 
@@ -301,18 +314,17 @@ class HygieneAuditor:
             attributes=["sAMAccountName", "memberOf", "distinguishedName"],
         )
 
-        # Protected groups — accounts in these groups legitimately have adminCount=1
-        protected_group_dns = set()
-        for group_name in ["Domain Admins", "Enterprise Admins", "Schema Admins",
-                           "Administrators", "Account Operators", "Server Operators",
-                           "Print Operators", "Backup Operators", "Replicator",
-                           "Domain Controllers", "Read-only Domain Controllers"]:
-            entries = self.ldap.query(
-                search_filter=f"(&(objectClass=group)(cn={group_name}))",
-                attributes=["distinguishedName"],
-            )
-            for e in entries:
-                protected_group_dns.add(str(e["distinguishedName"]).lower())
+        # Protected groups — looked up by SID so we work on non-English
+        # locale ADs (German "Domänen-Admins", French "Admins du
+        # domaine", etc.). Field bug from the v1.3 sprint bug-class
+        # grep: previously used ``(cn=Domain Admins)`` which returns
+        # nothing on localized DCs → empty protected_group_dns set →
+        # every adminCount=1 user reported as orphan, including the
+        # legitimate DA / EA / SA accounts.
+        protected_group_dns = self._resolve_group_dns_by_sid(
+            domain_rids=(512, 519, 518, 520, 526, 527, 516, 521),
+            builtin_rids=(544, 548, 549, 550, 551, 552),
+        )
 
         orphans = []
         for e in admin_entries:
@@ -368,15 +380,12 @@ class HygieneAuditor:
                 "precedence": int(e["msDS-PasswordSettingsPrecedence"].value or 0),
             })
 
-        # Check if any FGPP targets privileged groups
-        priv_group_dns = set()
-        for gn in ["Domain Admins", "Enterprise Admins", "Schema Admins", "Administrators"]:
-            ge = self.ldap.query(
-                search_filter=f"(&(objectClass=group)(cn={gn}))",
-                attributes=["distinguishedName"],
-            )
-            for g in ge:
-                priv_group_dns.add(str(g["distinguishedName"]).lower())
+        # Check if any FGPP targets privileged groups. Look up by SID
+        # for locale-portability (see _adminsdholder_orphans field bug).
+        priv_group_dns = self._resolve_group_dns_by_sid(
+            domain_rids=(512, 519, 518),
+            builtin_rids=(544,),
+        )
 
         privileged_covered = bool(priv_group_dns & applies_to_all)
 
@@ -682,3 +691,40 @@ class HygieneAuditor:
             if sid:
                 return str(sid)
         return None
+
+    def _resolve_group_dns_by_sid(
+        self,
+        *,
+        domain_rids: tuple[int, ...] = (),
+        builtin_rids: tuple[int, ...] = (),
+    ) -> set[str]:
+        """Resolve a set of well-known group RIDs to their lower-cased
+        DN strings via ``(objectSid=<full-sid>)`` lookups.
+
+        Locale-portable replacement for ``(cn=Domain Admins)``-style
+        queries — works on German / French / Japanese / etc. ADs
+        where the displayName is translated but the SID is constant.
+
+        ``domain_rids`` are appended to the discovered domain SID.
+        ``builtin_rids`` are looked up under ``S-1-5-32-<rid>``.
+        Missing groups are silently skipped (some lookups fail if the
+        group doesn't exist on the target — e.g. RODC group on a
+        forest without RODCs)."""
+        dns: set[str] = set()
+        if domain_rids:
+            domain_sid = self._get_domain_sid()
+            if domain_sid:
+                for rid in domain_rids:
+                    dns.update(self._dn_for_sid(f"{domain_sid}-{rid}"))
+        for rid in builtin_rids:
+            dns.update(self._dn_for_sid(f"S-1-5-32-{rid}"))
+        return dns
+
+    def _dn_for_sid(self, sid: str) -> list[str]:
+        """Return the lower-cased DN of an object by SID (one match
+        max — SIDs are unique). Empty list when not found."""
+        entries = self.ldap.query(
+            search_filter=f"(objectSid={sid})",
+            attributes=["distinguishedName"],
+        )
+        return [str(e["distinguishedName"]).lower() for e in entries]
