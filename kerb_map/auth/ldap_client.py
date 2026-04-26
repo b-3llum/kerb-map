@@ -386,6 +386,7 @@ class LDAPClient:
         # Best-effort: if the server stripped it or the ldap3 attr layout
         # changes, we just leave the placeholders intact.
         dc_dns_hostname: str | None = None
+        is_rodc: bool = False
         try:
             other = self.conn.server.info.other or {}
             val = other.get("dnsHostName")
@@ -393,6 +394,23 @@ class LDAPClient:
                 dc_dns_hostname = str(val[0])
             elif isinstance(val, str):
                 dc_dns_hostname = val
+            # rootDSE.isReadOnly is the canonical RODC marker. When True,
+            # the bound DC is a Read-Only Domain Controller — its NTDS
+            # holds a partial replica (only cached principals' secrets),
+            # which means several findings can be silently incomplete:
+            # DCSync rights audit, Shadow Credentials inventory,
+            # Kerberoast pre-image checks. The CLI surfaces a banner
+            # warning so the operator knows to re-bind to a writable DC
+            # for completeness. Field gap from the v1.3 sprint RODC
+            # validation — silent partial results were the worst kind
+            # of "looks fine" failure.
+            ro = other.get("isReadOnly")
+            if isinstance(ro, list) and ro:
+                ro = ro[0]
+            if isinstance(ro, str):
+                is_rodc = ro.upper() == "TRUE"
+            elif isinstance(ro, bool):
+                is_rodc = ro
         except Exception:
             pass
 
@@ -407,6 +425,7 @@ class LDAPClient:
             "when_created":          _str("whenCreated"),
             "domain_sid":            domain_sid,
             "dc_dns_hostname":       dc_dns_hostname,
+            "is_rodc":               is_rodc,
         }
 
     def close(self):

@@ -1,0 +1,41 @@
+# lab/Vagrantfile.win2022-rodc — RODC for kerblab2022.local.
+#
+# Read-Only Domain Controller. Brings up a second Windows Server 2022
+# box, joins it to the existing kerblab2022.local forest (provisioned
+# by Vagrantfile.win2022), and promotes as RODC. Validates kerb-map's
+# behaviour against the UAC bit 0x4000000 (PARTIAL_SECRETS_ACCOUNT)
+# that distinguishes RODCs from writable DCs.
+#
+# Bring up (after dc22 is healthy):
+#   cd lab && VAGRANT_VAGRANTFILE=Vagrantfile.win2022-rodc vagrant up rodc22
+#
+# Default credentials:
+#   DC IP        : 192.168.57.22  (kerblab2022.local DC)
+#   RODC IP      : 192.168.57.23
+#   Domain       : kerblab2022.local
+#   Domain Admin : Administrator / vagrant
+
+Vagrant.configure("2") do |config|
+  config.vm.define "rodc22" do |rodc|
+    rodc.vm.box = "gusztavvargadr/windows-server-2022-standard"
+    rodc.vm.hostname = "RODC22"
+    rodc.vm.network "private_network", ip: "192.168.57.23"
+
+    rodc.vm.communicator = "winrm"
+    rodc.winrm.username = "vagrant"
+    rodc.winrm.password = "vagrant"
+    rodc.winrm.timeout = 1800
+
+    rodc.vm.provider "virtualbox" do |vb|
+      vb.name = "kerb-lab-rodc22"
+      vb.memory = 4096
+      vb.cpus = 2
+      vb.customize ["modifyvm", :id, "--audio-driver", "none"]
+    end
+
+    # Vagrant's built-in provisioner is unreliable for these boxes
+    # (the dc22 install showed `vagrant up` exiting before stage-1
+    # PowerShell ran). The RODC promotion is driven from the host
+    # over WinRM after `vagrant up` returns; see lab/win/promote_rodc.ps1.
+  end
+end
