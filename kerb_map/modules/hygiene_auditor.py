@@ -83,15 +83,28 @@ class HygieneResult:
     service_acct_hygiene: list[dict] = field(default_factory=list)
 
     def finding_count(self) -> int:
+        # Each of the dict-shaped sub-results (laps_coverage,
+        # krbtgt_age, fgpp_audit) needs a "the audit didn't run" guard
+        # before checking its threshold, otherwise an empty {} would
+        # be counted via the *default* — and the previous defaults
+        # were inconsistent (FGPP defaulted pessimistic = +1, LAPS
+        # / krbtgt defaulted optimistic = +0). Treat empty/missing
+        # data uniformly as "no audit data, no finding" so a partially
+        # constructed HygieneResult (test fixture, future
+        # partial-resume) doesn't silently report phantom findings.
         count = 0
         count += len(self.sid_history)
-        count += (0 if self.laps_coverage.get("coverage_pct", 100) >= 90 else 1)
-        count += (1 if self.krbtgt_age.get("age_days", 0) > 180 else 0)
+        if self.laps_coverage and self.laps_coverage.get("coverage_pct", 100) < 90:
+            count += 1
+        if self.krbtgt_age and self.krbtgt_age.get("age_days", 0) > 180:
+            count += 1
         count += len(self.adminsdholder_orphans)
-        count += (0 if self.fgpp_audit.get("privileged_covered") else 1)
+        if self.fgpp_audit and not self.fgpp_audit.get("privileged_covered"):
+            count += 1
         count += len(self.credential_exposure)
         count += len(self.primary_group_abuse)
-        count += (1 if len(self.stale_computers) > 0 else 0)
+        if self.stale_computers:
+            count += 1
         count += len(self.service_acct_hygiene)
         return count
 

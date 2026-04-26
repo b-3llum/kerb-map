@@ -111,19 +111,28 @@ def test_module_constants_present():
 # ─────────────────────────────────── HygieneResult ─
 
 
-def test_hygiene_result_finding_count_default_is_two():
-    """Default empty HygieneResult should still register the absent
-    LAPS coverage and absent FGPP privileged-coverage counts. Pre-fix
-    field-bug regression: a refactor that defaulted ``laps_coverage``
-    to ``{}`` without the ``coverage_pct`` key produced ``0`` (because
-    ``.get(..., 100) >= 90`` was true on missing keys with default 100,
-    masking the no-LAPS-data state). Pin the actual count."""
-    r = HygieneResult()
-    # Default: laps_coverage_pct missing → defaults to 100 → no finding
-    # FGPP privileged_covered missing → falsy → +1 finding
-    # Everything else is empty list / 0 → no finding
-    # Net: 1 finding (FGPP)
-    assert r.finding_count() == 1
+def test_hygiene_result_finding_count_default_is_zero():
+    """Empty HygieneResult means the audit didn't run — finding_count
+    must be 0, not 1. Field bug from the v1.3 sprint: previously the
+    FGPP check defaulted *pessimistic* (empty {} treated as
+    "privileged not covered" → +1) while LAPS / krbtgt defaulted
+    *optimistic* (empty {} treated as "100% covered" / "0 days old"
+    → 0). The inconsistency made the reporter say "1 hygiene finding"
+    on a result the audit hadn't filled in. Now: empty/missing data
+    on every dict-shaped sub-result counts 0."""
+    assert HygieneResult().finding_count() == 0
+
+
+def test_hygiene_result_finding_count_when_audit_ran_clean():
+    """All sub-checks ran and found nothing wrong — count is still 0.
+    Pin the post-audit zero state so the new guards don't accidentally
+    skip a real finding."""
+    r = HygieneResult(
+        laps_coverage={"coverage_pct": 100},      # covered
+        krbtgt_age={"age_days": 30},               # recent
+        fgpp_audit={"privileged_covered": True},   # covered
+    )
+    assert r.finding_count() == 0
 
 
 def test_hygiene_result_counts_each_finding_kind():
