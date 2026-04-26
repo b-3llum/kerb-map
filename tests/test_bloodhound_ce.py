@@ -513,3 +513,233 @@ def test_ou_create_finding_emits_kerbmap_createcomputerou_edge(tmp_path):
     assert edge["target"] == "OU=Helpdesk,DC=corp,DC=local"
     assert edge["props"]["right"] == "CreateChild(computer)"
     assert edge["props"]["maq"]   == 0
+
+
+# ─────────────────── Aces folding (KerbMap → graph edges) ──────
+
+
+def _read_meta(zip_path):
+    with zipfile.ZipFile(zip_path) as zf:
+        return json.loads(zf.read("_kerbmap_metadata.json"))["meta"]
+
+
+def _read_node(zip_path, file_name, sid):
+    with zipfile.ZipFile(zip_path) as zf:
+        data = json.loads(zf.read(file_name))["data"]
+    for node in data:
+        if node.get("ObjectIdentifier") == sid:
+            return node
+    raise AssertionError(f"node {sid} not in {file_name}")
+
+
+def test_dcsync_finding_folds_two_aces_onto_domain_node(tmp_path):
+    """Full DCSync needs both GetChanges + GetChangesAll on the
+    domain node — emitting only one yields the partial-DCSync edge,
+    which doesn't reproduce the path SharpHound would build."""
+    exporter = BloodHoundCEExporter(
+        ldap=_ldap([[], [], [], []]),
+        domain="corp.local", domain_sid="S-1-5-21-10-20-30",
+        base_dn="DC=corp,DC=local",
+    )
+    exporter.add_findings([Finding(
+        target="svc_old", attack="DCSync (full)",
+        severity="CRITICAL", priority=95, reason="...",
+        data={"principal_sid": "S-1-5-21-10-20-30-1234",
+              "rights_granted": ["Get-Changes", "Get-Changes-All"]},
+    )])
+    out = exporter.export(str(tmp_path / "scan.zip"))
+
+    domain = _read_node(out, "domains.json", "S-1-5-21-10-20-30")
+    rights = sorted(a["RightName"] for a in domain["Aces"])
+    assert rights == ["GetChanges", "GetChangesAll"]
+    assert all(a["PrincipalSID"] == "S-1-5-21-10-20-30-1234" for a in domain["Aces"])
+    # Sidecar edge marked folded so kerb-chain knows it's also in the graph.
+    assert _read_meta(out)["folded"] == 1
+
+
+def test_shadow_creds_folds_addkeycredentiallink_onto_target_user(tmp_path):
+    """The Shadow Creds writer becomes a real ACE on the target
+    user, so BH CE's normal pathfinding includes the takeover."""
+    bob = _entry({
+        "sAMAccountName":           "bob_da",
+        "objectSid":                bytes.fromhex(
+            "0105000000000005150000000a000000140000001e000000dc050000"
+        ),  # S-1-5-21-10-20-30-1500
+        "distinguishedName":        "CN=bob_da,CN=Users,DC=corp,DC=local",
+        "userAccountControl":       0x10200,
+        "servicePrincipalName":     [],
+        "memberOf":                 [],
+        "primaryGroupID":           513,
+        "adminCount":               1,
+        "pwdLastSet":               132000000000000000,
+        "lastLogonTimestamp":       133500000000000000,
+        "description":              None,
+        "sIDHistory":               [],
+        "msDS-AllowedToDelegateTo": [],
+    })
+    exporter = BloodHoundCEExporter(
+        ldap=_ldap([[bob], [], [], []]),
+        domain="corp.local", domain_sid="S-1-5-21-10-20-30",
+        base_dn="DC=corp,DC=local",
+    )
+    exporter.add_findings([Finding(
+        target="bob_da", attack="Shadow Credentials (write access)",
+        severity="CRITICAL", priority=92, reason="...",
+        data={"writer_sid": "S-1-5-21-10-20-30-1700",
+              "target_dn":  "CN=bob_da,CN=Users,DC=corp,DC=local"},
+    )])
+    out = exporter.export(str(tmp_path / "shadow.zip"))
+
+    target = _read_node(out, "users.json", "S-1-5-21-10-20-30-1500")
+    aces = target["Aces"]
+    assert len(aces) == 1
+    assert aces[0]["PrincipalSID"] == "S-1-5-21-10-20-30-1700"
+    assert aces[0]["RightName"]    == "AddKeyCredentialLink"
+    assert aces[0]["IsInherited"]  is False
+    assert _read_meta(out)["folded"] == 1
+
+
+def test_tier0_acl_writeacl_folds_with_correct_sharphound_rightname(tmp_path):
+    """kerb-map's internal label 'WriteDACL' must map to SharpHound's
+    'WriteDacl' (case differs) — otherwise BH CE doesn't recognise it
+    as the WriteDacl edge and pathfinding silently skips it."""
+    da_group = _entry({
+        "sAMAccountName":     "Domain Admins",
+        "objectSid":          bytes.fromhex(
+            "0105000000000005150000000a000000140000001e00000000020000"
+        ),  # S-1-5-21-10-20-30-512
+        "distinguishedName":  "CN=Domain Admins,CN=Users,DC=corp,DC=local",
+        "member":             [],
+        "adminCount":         1,
+    })
+    exporter = BloodHoundCEExporter(
+        ldap=_ldap([[], [], [da_group], []]),
+        domain="corp.local", domain_sid="S-1-5-21-10-20-30",
+        base_dn="DC=corp,DC=local",
+    )
+    exporter.add_findings([Finding(
+        target="Domain Admins",
+        attack="Tier-0 ACL: WriteDACL on Privileged group",
+        severity="CRITICAL", priority=93, reason="...",
+        data={"writer_sid":  "S-1-5-21-10-20-30-1900",
+              "target_sid":  "S-1-5-21-10-20-30-512",
+              "target_kind": "Privileged group",
+              "right":       "WriteDACL"},
+    )])
+    out = exporter.export(str(tmp_path / "tier0.zip"))
+
+    grp = _read_node(out, "groups.json", "S-1-5-21-10-20-30-512")
+    assert grp["Aces"][0]["RightName"] == "WriteDacl"
+    # Principal SID isn't in any collection here, so PrincipalType
+    # falls back to "Base". The principal-resolution path is covered
+    # by test_principal_type_resolved_when_principal_in_collection.
+    assert grp["Aces"][0]["PrincipalType"] == "Base"
+
+
+def test_unfoldable_finding_marked_folded_false_in_sidecar(tmp_path):
+    """ESC9 / BadSuccessor / KdsReadable target template / OU / KDS
+    nodes that BH CE doesn't model — they stay in the sidecar with
+    folded=false so kerb-chain still has a machine-readable view."""
+    exporter = BloodHoundCEExporter(
+        ldap=_ldap([[], [], [], []]),
+        domain="corp.local", domain_sid="S-1-5-21-10-20-30",
+        base_dn="DC=corp,DC=local",
+    )
+    exporter.add_findings([Finding(
+        target="ou_admin on OU=Lab,DC=corp,DC=local",
+        attack="BadSuccessor (writable OU)",
+        severity="HIGH", priority=88, reason="...",
+        data={"principal_sid": "S-1-5-21-10-20-30-1500",
+              "ou_dn":         "OU=Lab,DC=corp,DC=local"},
+    )])
+    out = exporter.export(str(tmp_path / "unfold.zip"))
+    with zipfile.ZipFile(out) as zf:
+        meta = json.loads(zf.read("_kerbmap_metadata.json"))
+    assert meta["meta"]["folded"] == 0
+    assert meta["data"][0]["folded"] is False
+
+
+def test_aces_dedup_within_target(tmp_path):
+    """Two findings with the same writer hitting the same target with
+    the same right collapse to a single ACE — otherwise BH CE shows
+    duplicate edges, which clutters the graph and breaks count-based
+    Cypher queries."""
+    da_group = _entry({
+        "sAMAccountName":     "Domain Admins",
+        "objectSid":          bytes.fromhex(
+            "0105000000000005150000000a000000140000001e00000000020000"
+        ),
+        "distinguishedName":  "CN=Domain Admins,CN=Users,DC=corp,DC=local",
+        "member":             [],
+        "adminCount":         1,
+    })
+    exporter = BloodHoundCEExporter(
+        ldap=_ldap([[], [], [da_group], []]),
+        domain="corp.local", domain_sid="S-1-5-21-10-20-30",
+        base_dn="DC=corp,DC=local",
+    )
+    base = dict(target="Domain Admins",
+                attack="Tier-0 ACL: GenericAll on Privileged group",
+                severity="CRITICAL", priority=95, reason="...")
+    exporter.add_findings([
+        Finding(**base, data={"writer_sid": "S-1-5-21-10-20-30-1900",
+                              "target_sid": "S-1-5-21-10-20-30-512",
+                              "target_kind": "Privileged group",
+                              "right": "GenericAll"}),
+        Finding(**base, data={"writer_sid": "S-1-5-21-10-20-30-1900",
+                              "target_sid": "S-1-5-21-10-20-30-512",
+                              "target_kind": "Privileged group",
+                              "right": "GenericAll"}),
+    ])
+    out = exporter.export(str(tmp_path / "dup.zip"))
+    grp = _read_node(out, "groups.json", "S-1-5-21-10-20-30-512")
+    assert len(grp["Aces"]) == 1
+
+
+def test_principal_type_resolved_when_principal_in_collection(tmp_path):
+    """When the writer's SID matches a collected user, PrincipalType
+    must be 'User' so BH CE renders the edge from the right node
+    kind in the graph."""
+    helpdesk = _entry({
+        "sAMAccountName":           "helpdesk_op",
+        "objectSid":                bytes.fromhex(
+            "0105000000000005150000000a000000140000001e0000006c070000"
+        ),  # S-1-5-21-10-20-30-1900
+        "distinguishedName":        "CN=helpdesk_op,CN=Users,DC=corp,DC=local",
+        "userAccountControl":       0x10200,
+        "servicePrincipalName":     [],
+        "memberOf":                 [],
+        "primaryGroupID":           513,
+        "adminCount":               None,
+        "pwdLastSet":               132000000000000000,
+        "lastLogonTimestamp":       133500000000000000,
+        "description":              None,
+        "sIDHistory":               [],
+        "msDS-AllowedToDelegateTo": [],
+    })
+    da_group = _entry({
+        "sAMAccountName":     "Domain Admins",
+        "objectSid":          bytes.fromhex(
+            "0105000000000005150000000a000000140000001e00000000020000"
+        ),
+        "distinguishedName":  "CN=Domain Admins,CN=Users,DC=corp,DC=local",
+        "member":             [],
+        "adminCount":         1,
+    })
+    exporter = BloodHoundCEExporter(
+        ldap=_ldap([[helpdesk], [], [da_group], []]),
+        domain="corp.local", domain_sid="S-1-5-21-10-20-30",
+        base_dn="DC=corp,DC=local",
+    )
+    exporter.add_findings([Finding(
+        target="Domain Admins",
+        attack="Tier-0 ACL: GenericAll on Privileged group",
+        severity="CRITICAL", priority=95, reason="...",
+        data={"writer_sid":  "S-1-5-21-10-20-30-1900",
+              "target_sid":  "S-1-5-21-10-20-30-512",
+              "target_kind": "Privileged group",
+              "right":       "GenericAll"},
+    )])
+    out = exporter.export(str(tmp_path / "ptype.zip"))
+    grp = _read_node(out, "groups.json", "S-1-5-21-10-20-30-512")
+    assert grp["Aces"][0]["PrincipalType"] == "User"

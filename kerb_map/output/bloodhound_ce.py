@@ -14,31 +14,41 @@ Each follows the BloodHound CE collector format:
   Properties, Aces, plus type-specific arrays (Members for groups,
   HasSIDHistory for users, etc.)
 
-kerb-map findings ship in a sidecar ``_kerbmap_metadata.json`` inside
-the same zip — NOT as BH-CE-renderable graph edges (yet). The
-sidecar is for kerb-chain / external tooling; BH CE skips it during
-ingest because the underscore-prefixed name doesn't match a known
-SharpHound type.
+KerbMap findings are emitted two ways for the same zip:
 
-Field bug from a real BH CE 5.x ingest (verified end-to-end against
-a running container): the previous shape — a top-level
-``kerbmap_edges.json`` with ``meta.type="kerbmap_edges"`` — caused
-BH CE to reject the *entire upload* with HTTP 500 + "no valid meta
-tag found". BH CE's ingester only accepts the canonical SharpHound
-types (users / computers / groups / domains / gpos / ous /
-containers / aiacas / rootcas / etc.).
+1. **Folded into the target node's ``Aces`` array** when the finding
+   maps cleanly to a SharpHound-recognised ``RightName`` (e.g.
+   ``GenericAll``, ``WriteDacl``, ``AddKeyCredentialLink``,
+   ``GetChangesAll``). These render as native edges in BH CE — the
+   operator's "shortest path to Domain Admin" now traverses
+   kerb-map's findings without any extra tooling. Currently three
+   finding classes fold:
 
-The right long-term fix is to fold each finding into the affected
-node's ``Aces`` array using a SharpHound-recognised ``RightName``
-(e.g. ``GenericAll``, ``WriteDacl``, ``AddKeyCredentialLink``,
-``GetChangesAll``). That's tracked as a v1.2.x follow-up; doing it
-right needs per-finding mapping + node-side merge logic.
+   - ``DCSync rights``  → Domain node Aces with ``GetChanges`` +
+     ``GetChangesAll`` (full DCSync needs both)
+   - ``Shadow Credentials write`` → target user's Aces with
+     ``AddKeyCredentialLink``
+   - ``Tier-0 ACL``     → target's Aces with the right's SharpHound
+     equivalent (``GenericAll`` / ``WriteDacl`` / ``WriteOwner`` /
+     ``GenericWrite`` / ``AddMember`` / ``AddSelf``)
 
-The 4 standard JSONs (users/computers/groups/domains) DO ingest
-cleanly — verified by Cypher queries against the loaded graph
-(operators can use BH CE's normal pathfinding immediately, just
-without the KerbMap-specific edges). Sidecar gives kerb-chain a
-machine-readable view of what kerb-map found for orchestration.
+2. **Sidecar ``_kerbmap_metadata.json``** (underscore prefix → BH CE
+   skips during ingest) carries every finding-as-edge for kerb-chain
+   / external tooling. Each entry has a ``folded`` field indicating
+   whether it also became a graph ACE. Findings whose target isn't a
+   collected node (ADCS templates, OUs, dMSAs) are sidecar-only
+   because BH CE's standard schema doesn't include those node types.
+
+Field bug history that shaped this design:
+
+- A previous shape — a top-level ``kerbmap_edges.json`` with
+  ``meta.type="kerbmap_edges"`` — caused BH CE to reject the *entire
+  upload* with HTTP 500 + "no valid meta tag found". BH CE's ingester
+  only accepts the canonical SharpHound types (users / computers /
+  groups / domains / gpos / ous / containers / aiacas / rootcas /
+  etc.). The fix landed in two parts: (a) underscore-prefixed sidecar
+  name so BH CE skips the file, (b) per-node Aces folding so
+  KerbMap findings become *real* graph edges instead of metadata.
 
 Reference: https://bloodhound.specterops.io/collect-data/json-formats
 """
@@ -58,8 +68,34 @@ log = Logger()
 
 
 COLLECTOR_NAME    = "kerb-map"
-COLLECTOR_VERSION = "2.0.0-foundation"
+COLLECTOR_VERSION = "2.1.0-aces-fold"
 SCHEMA_VERSION    = 6  # BloodHound CE 5.x ingestion schema
+
+
+# ────────────────────────────────────────────────────────────────────── #
+#  Aces-folding map                                                      #
+# ────────────────────────────────────────────────────────────────────── #
+#
+# Translates kerb-map internal labels to SharpHound RightName(s).
+# Multi-value entries (DCSync) emit one ACE per RightName so the
+# folded edge matches what SharpHound itself would emit if it had
+# walked the same DACL.
+#
+# Right names not in this map => folding skipped, sidecar-only.
+# (e.g. CreateChild, ReadGMSAPassword, ManageCA — known to BH CE but
+# not currently emitted by any kerb-map finding with a SID-resolvable
+# target node.)
+
+_RIGHT_NAME_MAP: dict[str, list[str]] = {
+    # Tier-0 ACL labels (kerb_map.modules.tier0_acl.RIGHT_SEVERITY)
+    "GenericAll":             ["GenericAll"],
+    "WriteDACL":              ["WriteDacl"],   # SharpHound camel-case
+    "WriteOwner":             ["WriteOwner"],
+    "GenericWrite":           ["GenericWrite"],
+    "WriteProperty(member)":  ["AddMember"],
+    "Self (AddSelf)":         ["AddSelf"],
+    # User ACL labels share the Tier-0 vocabulary; no extras needed.
+}
 
 
 # ────────────────────────────────────────────────────────────────────── #
@@ -277,25 +313,22 @@ class BloodHoundCEExporter:
         groups    = self._collect_groups()
         domains   = self._collect_domain()
 
+        folded = self._fold_extra_edges(users, computers, groups, domains)
+
         out = Path(path)
         with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as zf:
             zf.writestr("users.json",     json.dumps(_wrap("users",     users), indent=2))
             zf.writestr("computers.json", json.dumps(_wrap("computers", computers), indent=2))
             zf.writestr("groups.json",    json.dumps(_wrap("groups",    groups), indent=2))
             zf.writestr("domains.json",   json.dumps(_wrap("domains",   domains), indent=2))
-            # Field bug from a real BH CE 5.x ingest: emitting our
-            # findings as a top-level "kerbmap_edges.json" with
-            # meta.type="kerbmap_edges" caused BH CE to reject the
-            # *entire* file with HTTP 500 + "no valid meta tag found"
-            # — BH CE's ingester only accepts the canonical SharpHound
-            # types (users/computers/groups/domains/gpos/ous/
-            # containers/aiacas/rootcas/etc.). Folding our findings
-            # into per-node ``Aces`` arrays is the right long-term fix
-            # (tracked as v1.2.x follow-up); for now we write the
-            # findings to a sidecar with a name BH CE doesn't try to
-            # ingest, so the zip is fully ingestible AND the operator
-            # / external tooling (kerb-chain) can still read the raw
-            # KerbMap* edges from the zip.
+            # Sidecar carries the full edge list for kerb-chain. Each
+            # entry is annotated with ``folded: bool`` so external
+            # readers can distinguish edges that ALSO render in the
+            # graph (folded=true) from edges that exist only here
+            # (folded=false — typically because the target isn't a
+            # collected SharpHound node type, e.g. ADCS template, OU,
+            # dMSA). See module docstring for the field bug history
+            # behind the underscore-prefixed filename.
             if self._extra_edges:
                 zf.writestr(
                     "_kerbmap_metadata.json",
@@ -303,12 +336,14 @@ class BloodHoundCEExporter:
                         "meta": {
                             "type":             "kerbmap_metadata",
                             "count":            len(self._extra_edges),
+                            "folded":           folded,
                             "version":          SCHEMA_VERSION,
                             "collectorversion": COLLECTOR_VERSION,
                             "_note": (
                                 "Sidecar, not BH CE-ingestible. "
-                                "Per-node Aces folding is the long-term "
-                                "fix; see docs/v1.2-known-gaps.md."
+                                "Edges with folded=true ALSO appear "
+                                "as ACEs on the target node and "
+                                "render in BH CE."
                             ),
                         },
                         "data": self._extra_edges,
@@ -318,9 +353,125 @@ class BloodHoundCEExporter:
         log.success(
             f"BloodHound CE zip → {out.resolve()} "
             f"({len(users)} users, {len(computers)} computers, "
-            f"{len(groups)} groups; {len(self._extra_edges)} kerb-map edges in sidecar)"
+            f"{len(groups)} groups; {len(self._extra_edges)} kerb-map edges, "
+            f"{folded} folded into graph)"
         )
         return out
+
+    # ------------------------------------------------------------------ #
+    #  Aces folding                                                      #
+    # ------------------------------------------------------------------ #
+
+    def _fold_extra_edges(self, users: list[dict], computers: list[dict],
+                          groups: list[dict], domains: list[dict]) -> int:
+        """Fold KerbMap findings into target nodes' Aces arrays so they
+        render as native BH CE edges. Returns the count of edges folded.
+
+        Each input edge is annotated in place with ``folded: bool`` so
+        the sidecar caller can report which subset became graph edges.
+        Folding is idempotent and dedupes (PrincipalSID, RightName) per
+        node — multiple findings against the same target with the same
+        right collapse to a single ACE.
+        """
+        # SID → node lookup (one dict across all node types — SIDs are
+        # globally unique within a domain so collisions are impossible).
+        by_sid: dict[str, dict] = {}
+        # DN → node lookup so edges with target_dn-only (Shadow Creds,
+        # Tier-0 ACL fallback) can resolve.
+        by_dn: dict[str, dict] = {}
+        for collection in (users, computers, groups, domains):
+            for node in collection:
+                sid = node.get("ObjectIdentifier")
+                if sid:
+                    by_sid[sid] = node
+                dn = (node.get("Properties") or {}).get("distinguishedname")
+                if dn:
+                    by_dn[dn.lower()] = node
+
+        folded_count = 0
+        for edge in self._extra_edges:
+            edge_type = edge.get("edge", "")
+            target = edge.get("target", "") or ""
+            source = edge.get("source", "") or ""
+            props = edge.get("props") or {}
+
+            right_names = self._resolve_right_names(edge_type, props)
+            if not right_names:
+                edge["folded"] = False
+                continue
+
+            target_node = by_sid.get(target) or by_dn.get(target.lower())
+            if target_node is None:
+                edge["folded"] = False
+                continue
+
+            if not source.startswith("S-1-"):
+                # Only SID principals fold; DN sources (e.g.
+                # KerbMapBadSuccessor source=dMSA DN) can't be ACE
+                # principals.
+                edge["folded"] = False
+                continue
+
+            principal_type = self._principal_type_for_sid(source, by_sid)
+            aces = target_node.setdefault("Aces", [])
+            seen = {(a.get("PrincipalSID"), a.get("RightName")) for a in aces}
+            for right_name in right_names:
+                key = (source, right_name)
+                if key in seen:
+                    continue
+                aces.append({
+                    "PrincipalSID":  source,
+                    "PrincipalType": principal_type,
+                    "RightName":     right_name,
+                    "IsInherited":   False,
+                })
+                seen.add(key)
+            edge["folded"] = True
+            folded_count += 1
+
+        return folded_count
+
+    @staticmethod
+    def _resolve_right_names(edge_type: str, props: dict) -> list[str]:
+        """Edge type → list of SharpHound RightNames to emit.
+
+        DCSync needs both GetChanges and GetChangesAll for a
+        SharpHound ingest to recognise it as full DCSync — emitting
+        one without the other gets you the partial-DCSync edge,
+        which doesn't build the same paths.
+        """
+        if edge_type == "KerbMapDCSyncBy":
+            return ["GetChanges", "GetChangesAll"]
+        if edge_type == "KerbMapAddKeyCredentialLink":
+            return ["AddKeyCredentialLink"]
+        if edge_type == "KerbMapWriteAcl":
+            label = props.get("right") or ""
+            return _RIGHT_NAME_MAP.get(label, [])
+        return []
+
+    @staticmethod
+    def _principal_type_for_sid(sid: str, by_sid: dict[str, dict]) -> str:
+        """Look up the principal node and return its BH CE type tag.
+
+        Used to populate the ACE's PrincipalType so BH CE can
+        render edges from the right node kind. Falls back to "Base"
+        when the principal isn't in the collected set (e.g. a
+        cross-domain SID we didn't enumerate).
+        """
+        node = by_sid.get(sid)
+        if node is None:
+            return "Base"
+        # Identify by which list it lives in via the type-specific
+        # arrays — cheap and unambiguous.
+        if "SPNTargets" in node or "HasSIDHistory" in node:
+            return "User"
+        if "Sessions" in node:
+            return "Computer"
+        if "Members" in node:
+            return "Group"
+        if "Trusts" in node:
+            return "Domain"
+        return "Base"
 
     # ------------------------------------------------------------------ #
     #  Per-type collectors                                               #
