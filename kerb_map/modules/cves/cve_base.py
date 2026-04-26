@@ -71,10 +71,22 @@ class CVEResult:
 
 
 class CVEBase(ABC):
-    def __init__(self, ldap_client, dc_ip: str, domain: str):
-        self.ldap   = ldap_client
-        self.dc_ip  = dc_ip
-        self.domain = domain
+    def __init__(self, ldap_client, dc_ip: str, domain: str,
+                 *, username: str | None = None,
+                 password: str | None = None,
+                 nthash: str | None = None,
+                 use_kerberos: bool = False):
+        self.ldap         = ldap_client
+        self.dc_ip        = dc_ip
+        self.domain       = domain
+        # Optional operator credentials. Most checks ignore them; GPP
+        # uses them to open an SMB session against SYSVOL and grep
+        # the GPP XMLs for `cpassword=`. Keyword-only so the existing
+        # 3-arg construction sites stay valid.
+        self.username     = username
+        self.password     = password
+        self.nthash       = nthash
+        self.use_kerberos = use_kerberos
 
     @abstractmethod
     def check(self) -> CVEResult:

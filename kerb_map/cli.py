@@ -775,7 +775,13 @@ def run_scan(args):
             only_cves = None
             if args.only_cves:
                 only_cves = {x.strip() for x in args.only_cves.split(",") if x.strip()}
-            cve_results = CVEScanner(ldap, args.dc_ip, args.domain).run(
+            cve_results = CVEScanner(
+                ldap, args.dc_ip, args.domain,
+                username=args.username,
+                password=password,
+                nthash=nthash,
+                use_kerberos=args.kerberos,
+            ).run(
                 aggressive=args.aggressive,
                 only=only_cves,
             )

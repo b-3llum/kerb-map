@@ -337,6 +337,58 @@ import struct, base64
 print('placeholder', end='')")" \
     || echo "[seed] gMSA creation skipped (Samba may reject the LDIF; safe to ignore on a Samba-only lab)."
 
+# ────────────────────────────────────────── v1 — GPP cpassword (MS14-025)
+# Drop a Groups.xml with an MS-published-key-encrypted cpassword into
+# the Default Domain Policy GPO's Machine\Preferences\Groups\ subtree.
+# The GPO already exists (provisioned by samba-tool domain provision),
+# so the seed only writes the file. No samba-tool gpo invocation needed.
+#
+# The cpassword below decrypts to "Password1!" — generated with the
+# public AES-256 key Microsoft documented (and which kerb-map's
+# decrypt_cpassword uses). If kerb-map's MS14-025 check works
+# end-to-end, this lights up CRITICAL with cleartext "Password1!"
+# and userName "helpdesk_admin".
+DEFAULT_GPO_DIR=/var/lib/samba/sysvol/lab.local/Policies/'{31B2F340-016D-11D2-945F-00C04FB984F9}'
+# Samba's provision creates the MACHINE directory in uppercase; the
+# Linux filesystem is case-sensitive so writing to "Machine" creates
+# a *sibling* dir that's invisible to anything walking the SMB share
+# with case-insensitive matching. Use the existing MACHINE so Samba's
+# SMB layer serves it under the standard case-insensitive lookup.
+GPP_DIR="${DEFAULT_GPO_DIR}/MACHINE/Preferences/Groups"
+mkdir -p "$GPP_DIR"
+# Clean up the wrong-case sibling left by earlier seed runs (otherwise
+# operators see two copies of the GPP file when listing SYSVOL via
+# Linux tooling — kerb-map's SMB walker is case-fold-safe; this is
+# purely cosmetic for shell-side debugging).
+rm -rf "${DEFAULT_GPO_DIR}/Machine" 2>/dev/null || true
+cat > "$GPP_DIR/Groups.xml" <<'GPPXML'
+<?xml version="1.0" encoding="utf-8"?>
+<Groups clsid="{3125E937-EB16-4b4c-9934-544FC6D24D26}">
+  <User clsid="{DF5F1855-51E5-4d24-8B1A-D9BDE98BA1D1}"
+        name="helpdesk_admin"
+        image="2"
+        changed="2014-01-01 00:00:00"
+        uid="{A1B2C3D4-1234-5678-9ABC-DEF012345678}">
+    <Properties action="U"
+                newName=""
+                fullName="Helpdesk Admin"
+                description="Local admin pushed via GPP — pre-MS14-025"
+                cpassword="VPe/o9YRyz2cksnYRbNeQunV3jqnKFX4lk/mmt8mza8"
+                changeLogon="0"
+                noChange="0"
+                neverExpires="0"
+                acctDisabled="0"
+                subAuthority=""
+                userName="helpdesk_admin"/>
+  </User>
+</Groups>
+GPPXML
+# Match SYSVOL's typical permission model so the SMB share serves it
+# back to authenticated users (Samba enforces 0644-ish access on SYSVOL
+# files; the GPO directories are world-readable for domain members).
+chown -R root:root "$DEFAULT_GPO_DIR" 2>/dev/null || true
+chmod 644 "$GPP_DIR/Groups.xml"
+
 # ────────────────────────────────────────────────────────────── done
 echo "[seed] complete at $(date -u +%FT%TZ)"
 echo "[seed] expected kerb-map findings (lab.local against this DC):"
@@ -344,6 +396,7 @@ cat <<'SUMMARY'
   CRITICAL  DCSync (full)                       svc_old_admin
   CRITICAL  Shadow Credentials (inventory)      da_alice (privileged + key)
   CRITICAL  Shadow Credentials (write access)   bob_da (helpdesk_op writes)
+  CRITICAL  GPP cpassword (MS14-025)            helpdesk_admin / Password1!
   HIGH      Kerberoast                          svc_sql / svc_iis
   HIGH      AS-REP Roast                        oldsvc
   CRITICAL  Unconstrained Delegation            web01$
