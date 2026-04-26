@@ -125,8 +125,37 @@ class LDAPClient:
             self._announce_bind(t, conn)
             return conn
 
+        # Detect the hardened-estate signature: every transport bind
+        # rejected with strongerAuthRequired or invalidCredentials in
+        # a TLS-handshake-failed shape. This is a library-level
+        # limitation in ldap3 2.9.x — its GSSAPI SASL bind hard-codes
+        # NO_SECURITY_LAYER (see ldap3/protocol/sasl/kerberos.py L216),
+        # so the server's "you must sign" requirement can't be
+        # satisfied by any transport when no LDAPS cert is available.
+        # Surface an actionable error rather than the cryptic chain.
+        # Field gap surfaced by the v1.3 sprint hardened-GPO test.
+        joined = " ".join(errors).lower()
+        if (
+            "strongerauthrequired" in joined
+            or ("invalidcredentials" in joined and "tls" not in joined and "wrap" not in joined)
+            or ("connection reset" in joined and "ssl" in joined)
+        ):
+            hint = (
+                "\n\n[hint] every transport rejected with a hardened-LDAP "
+                "signature. The DC likely requires signed LDAP binds (\"LDAP "
+                "server signing requirements = Required\"). ldap3's GSSAPI "
+                "SASL bind doesn't negotiate signing layers (library-level "
+                "limit; tracked as a v1.3.x follow-up). Workarounds:\n"
+                "  - enroll an LDAPS cert on the DC (AD CS or any CA cert "
+                "with the DC FQDN as SAN). LDAPS = TLS = signing layer "
+                "the server accepts.\n"
+                "  - scan from a domain-joined Windows host using kerb-map "
+                "via WSL — the host's native LDAP client handles signing."
+            )
+        else:
+            hint = ""
         raise LDAPAuthError(
-            "All LDAP transports failed:\n  " + "\n  ".join(errors)
+            "All LDAP transports failed:\n  " + "\n  ".join(errors) + hint
         )
 
     def _open(self, transport, username, password, hashes, use_kerberos):
