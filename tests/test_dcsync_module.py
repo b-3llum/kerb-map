@@ -73,6 +73,19 @@ def test_well_known_privileged_recognises_domain_admins():
     assert is_well_known_privileged("S-1-5-32-544")        # BUILTIN\Admins
 
 
+def test_well_known_privileged_includes_key_admins():
+    """Field bug regression from the v1.3 sprint Win22 validation:
+    ``Key Admins`` (-526) and ``Enterprise Key Admins`` (-527) are
+    built-in groups whose purpose is to write msDS-KeyCredentialLink
+    on privileged accounts (Windows Hello for Business). Without
+    them in the suffix list, the Shadow Credentials write-access
+    audit fires CRITICAL on every Windows DC for these groups on
+    every adminCount=1 user. Samba 4 doesn't ship the groups so the
+    bug stayed hidden until real-Windows testing."""
+    assert is_well_known_privileged("S-1-5-21-1-2-3-526")
+    assert is_well_known_privileged("S-1-5-21-1-2-3-527")
+
+
 def test_well_known_privileged_rejects_random_principal():
     assert not is_well_known_privileged("S-1-5-21-1-2-3-1234")
     assert not is_well_known_privileged(None)
