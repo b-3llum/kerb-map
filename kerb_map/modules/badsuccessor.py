@@ -60,12 +60,24 @@ class BadSuccessor(Module):
     in_default_run = True
 
     def scan(self, ctx: ScanContext) -> ScanResult:
-        fl = (ctx.domain_info or {}).get("fl_int") or 0
-        if fl < SERVER_2025_FL:
+        # Gate on schema-presence rather than functional level. Field
+        # bug from the v1.3 sprint Server 2025 lab: the dc25 box ships
+        # with the Server 2025 schema (which has the dMSA class) but
+        # was promoted with `WinThreshold` forest mode (FL=7) for
+        # compatibility — a legitimate forest-upgrade transition state.
+        # The old FL gate skipped here even though dMSAs were
+        # query-able. Schema-presence is the actual constraint:
+        # ldap3 raises LDAPObjectClassError when the class isn't
+        # in the schema, so we pre-flight via _has_dmsa_schema().
+        if not _has_dmsa_schema(ctx.ldap):
+            fl = (ctx.domain_info or {}).get("fl_int") or 0
             return ScanResult(
                 raw={
                     "applicable": False,
-                    "reason":     f"domain functional level {fl} (<10); dMSA not present",
+                    "reason":     (
+                        f"schema lacks msDS-DelegatedManagedServiceAccount "
+                        f"(domain functional level {fl}); dMSA not present"
+                    ),
                 },
             )
 
@@ -75,7 +87,7 @@ class BadSuccessor(Module):
         return ScanResult(
             raw={
                 "applicable":     True,
-                "functional_level": fl,
+                "functional_level": (ctx.domain_info or {}).get("fl_int") or 0,
                 "existing_dmsas": dmsa_raw,
                 "ou_writers":     ou_raw,
                 "summary": {
@@ -289,3 +301,24 @@ class BadSuccessor(Module):
         if ace.object_type_guid is None:
             return True
         return ace.object_type_guid.lower() == OBJECT_CLASS_DMSA
+
+
+def _has_dmsa_schema(ldap_client) -> bool:
+    """Check whether the bound DC's schema knows the dMSA class.
+
+    Replaces the prior FL-based gate (which silently skipped on
+    legitimate forest-upgrade transition states where the schema
+    was Server 2025 but the FL was lower). ldap3 with
+    ``get_info=ALL`` populates ``server.schema`` from the rootDSE
+    during connect; walk the cached object_classes. On any
+    failure (older ldap3, partial-init mock LDAP), default to
+    True so the query attempts and ldap_client logs the error
+    rather than silently skipping a real Server 2025 estate."""
+    try:
+        schema = ldap_client.conn.server.schema
+        if schema is None or not getattr(schema, "object_classes", None):
+            return True
+        wanted = "msds-delegatedmanagedserviceaccount"
+        return any(name.lower() == wanted for name in schema.object_classes)
+    except Exception:
+        return True

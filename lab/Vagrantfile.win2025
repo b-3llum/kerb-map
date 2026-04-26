@@ -1,0 +1,47 @@
+# lab/Vagrantfile.win2025 — Windows Server 2025 AD lab.
+#
+# Validates kerb-map's behaviour against the schema additions Server
+# 2025 ships:
+#   - dMSA (msDS-DelegatedManagedServiceAccount) — the Server 2025-only
+#     class that BadSuccessor module targets. Samba 4 lacks the schema
+#     class so kerb-map's schema-tolerance shim short-circuits there;
+#     dc25 is the first lab environment that exercises the live path.
+#   - LAPS-related schema updates
+#   - msDS-AuthN-Policy / msDS-AuthN-PolicySilo (newer schema bits)
+#
+# Bring up:
+#   cd lab && VAGRANT_VAGRANTFILE=Vagrantfile.win2025 vagrant up dc25
+# Tear down:
+#   VAGRANT_VAGRANTFILE=Vagrantfile.win2025 vagrant destroy -f dc25
+#
+# Default credentials (deterministic):
+#   Domain        : kerblab2025.local
+#   NetBIOS       : KERBLAB25
+#   Admin         : KERBLAB25\Administrator
+#   Admin pass    : vagrant   (inherited from the gusztavvargadr base)
+#   DSRM pass     : LabAdmin1!
+#   DC IP         : 192.168.57.25
+
+Vagrant.configure("2") do |config|
+  config.vm.define "dc25" do |dc|
+    dc.vm.box = "gusztavvargadr/windows-server-2025-standard"
+    dc.vm.hostname = "DC25"
+    dc.vm.network "private_network", ip: "192.168.57.25"
+
+    dc.vm.communicator = "winrm"
+    dc.winrm.username = "vagrant"
+    dc.winrm.password = "vagrant"
+    dc.winrm.timeout = 1800
+
+    dc.vm.provider "virtualbox" do |vb|
+      vb.name = "kerb-lab-dc25"
+      vb.memory = 4096
+      vb.cpus = 2
+      vb.customize ["modifyvm", :id, "--audio-driver", "none"]
+    end
+
+    # Provisioner is host-driven over WinRM after `vagrant up` returns
+    # — same pattern as Vagrantfile.win2022. See lab/win/promote_dc25.ps1
+    # and lab/win/seed_vulnerabilities_dc25.ps1.
+  end
+end

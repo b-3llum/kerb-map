@@ -29,10 +29,25 @@ def _entry(values: dict):
     return e
 
 
-def _ctx(query_responses, *, fl: int = SERVER_2025_FL):
+def _ctx(query_responses, *, fl: int = SERVER_2025_FL, has_dmsa_schema: bool | None = None):
+    """Build a ScanContext with a mocked LDAP. ``has_dmsa_schema``
+    overrides the schema-presence check (None = default to FL >= 10).
+
+    Field bug surfaced by the v1.3 sprint dc25 lab: BadSuccessor used
+    to gate on FL only; now it gates on schema-presence so a Server
+    2025 schema with lower FL (legitimate forest-upgrade transition)
+    still runs."""
     ldap = MagicMock()
     queue = list(query_responses)
     ldap.query.side_effect = lambda **_: queue.pop(0) if queue else []
+    schema_present = has_dmsa_schema if has_dmsa_schema is not None else (fl >= SERVER_2025_FL)
+    if schema_present:
+        ldap.conn.server.schema.object_classes = [
+            "user", "group", "computer",
+            "msDS-DelegatedManagedServiceAccount",
+        ]
+    else:
+        ldap.conn.server.schema.object_classes = ["user", "group", "computer"]
     return ScanContext(
         ldap=ldap,
         domain="corp.local",
@@ -43,22 +58,36 @@ def _ctx(query_responses, *, fl: int = SERVER_2025_FL):
     )
 
 
-# ────────────────────────────────────────────── functional-level gate ----
+# ────────────────────────────────────────────── schema-presence gate ----
 
 
-def test_pre_2025_domain_returns_inapplicable():
-    ctx = _ctx([], fl=7)  # 2016/2019/2022
+def test_pre_2025_schema_returns_inapplicable():
+    """Field bug from the v1.3 sprint: previously gated on FL only.
+    A pre-2025 domain (FL=7, schema lacks dMSA class) → not applicable."""
+    ctx = _ctx([], fl=7)  # FL gate AND schema lacks dMSA (default)
     result = BadSuccessor().scan(ctx)
     assert result.findings == []
     assert result.raw["applicable"] is False
-    assert "10" in result.raw["reason"]
+    assert "dMSA" in result.raw["reason"] or "delegated" in result.raw["reason"].lower()
 
 
-def test_2025_domain_runs_full_audit():
+def test_2025_schema_runs_full_audit():
+    """FL=10, schema has dMSA → audit runs."""
     ctx = _ctx([[], []])  # both queries empty
     result = BadSuccessor().scan(ctx)
     assert result.raw["applicable"] is True
     assert result.raw["functional_level"] == 10
+
+
+def test_2025_schema_with_lower_fl_still_runs():
+    """v1.3 sprint regression: a Server 2025 schema with WinThreshold
+    forest mode (FL=7) is a legitimate forest-upgrade transition state.
+    The OLD code skipped here even though dMSAs were query-able. The
+    new schema-presence gate must let it through."""
+    ctx = _ctx([[], []], fl=7, has_dmsa_schema=True)
+    result = BadSuccessor().scan(ctx)
+    assert result.raw["applicable"] is True
+    assert result.raw["functional_level"] == 7
 
 
 # ────────────────────────────────────── existing dMSA → predecessor link ----
