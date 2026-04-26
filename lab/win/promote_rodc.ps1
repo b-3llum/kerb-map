@@ -61,6 +61,12 @@ elseif ($Stage -eq 2) {
     $cred   = New-Object System.Management.Automation.PSCredential("$Netbios\$AdminUser", $secPwd)
     $dsrm   = ConvertTo-SecureString "LabAdmin1!" -AsPlainText -Force
 
+    # -CriticalReplicationOnly skips replicating optional features
+    # (recycle bin, etc.) before reboot — the optional-features
+    # replication is what crashed the v1.3-sprint first attempt
+    # (PR #45) with "replication operation was terminated because
+    # the system is shutting down". Optional features replicate
+    # post-reboot via the normal AD replication cadence.
     Install-ADDSDomainController `
         -DomainName $Domain `
         -InstallDns `
@@ -71,6 +77,7 @@ elseif ($Stage -eq 2) {
         -DatabasePath "C:\Windows\NTDS" `
         -LogPath "C:\Windows\NTDS" `
         -SysvolPath "C:\Windows\SYSVOL" `
+        -CriticalReplicationOnly:$true `
         -NoGlobalCatalog:$false `
         -NoRebootOnCompletion:$false `
         -Force:$true

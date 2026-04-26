@@ -16,8 +16,19 @@
 
 $ErrorActionPreference = "Continue"
 
-$Realm     = "kerblab2022.local"
-$BaseDN    = "DC=kerblab2022,DC=local"
+# Realm is auto-detected from the bound DC so the same seed works
+# against any kerblab*.local lab (dc22, dc25, future dc-hardened).
+# Override via env vars KERBLAB_REALM / KERBLAB_BASEDN if you want
+# to seed a domain whose name doesn't match the auto-detect.
+if ($env:KERBLAB_REALM) {
+    $Realm  = $env:KERBLAB_REALM
+    $BaseDN = $env:KERBLAB_BASEDN
+} else {
+    $Realm  = (Get-ADDomain).DNSRoot
+    $BaseDN = (Get-ADDomain).DistinguishedName
+}
+Write-Host "[seed] realm=$Realm base=$BaseDN"
+
 $SeedPass  = ConvertTo-SecureString "Summer2024!" -AsPlainText -Force
 
 Import-Module ActiveDirectory -ErrorAction Stop
