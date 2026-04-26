@@ -2,6 +2,145 @@
 
 All notable changes to kerb-map will be documented in this file.
 
+## [1.3.0] — 2026-04
+
+Environment-coverage release. Built and ran kerb-map end-to-end against
+five labs: scaled Samba 4 (5k users), hardened-LDAP Samba, real Windows
+Server 2022, hardened-GPO Server 2022, and real Server 2025. Each
+environment surfaced silent failures the prior Samba-only test cycle
+couldn't see. **Operators should upgrade** — the headline fixes
+re-calibrate two CRITICAL-class miscalibrations and add visibility for
+two silent partial-result paths.
+
+### Headline fixes — operators should upgrade
+
+- **Key Admins / Enterprise Key Admins false-positive eliminated**
+  (#44). RIDs 526 / 527 are built-in Windows AD groups whose entire
+  *purpose* is to write `msDS-KeyCredentialLink` (Windows Hello for
+  Business / PKINIT enrollment). Without these in the well-known
+  privileged-SID set, the Shadow Credentials write-access audit fired
+  CRITICAL on every Windows DC for these groups on every adminCount=1
+  user — a constant false positive that drowned the real findings.
+  **Hidden by Samba 4 not shipping these groups, so the bug stayed
+  invisible through every Samba-only test cycle.** Operators upgrading
+  from v1.2.x will see CRITICAL counts drop on Windows estates as the
+  noise clears.
+
+- **RODC awareness — silent partial-result fix** (#45). Scanning a
+  Read-Only Domain Controller silently returned partial results
+  (DCSync rights audit walks the partial NTDS replica; Shadow
+  Credentials inventory only sees cached principals; Kerberoast
+  recipes can fail with `KRB_AP_ERR_TKT_NYV` when the SPN isn't in
+  the PRP cache) and presented them as if they were the full picture.
+  Operator had no signal. Fix: `LDAPClient.get_domain_info()` now
+  reads `rootDSE.isReadOnly`; reporter renders a yellow `⚠ RODC
+  detected` banner with workaround guidance.
+
+- **Hardened-estate diagnosis — actionable error UX** (#46). Estates
+  that require LDAP signing + channel binding break every transport
+  in the bind chain. Root cause is library-level (ldap3 2.9.x
+  hard-codes `NO_SECURITY_LAYER` in GSSAPI SASL bind, see
+  `ldap3/protocol/sasl/kerberos.py` L216). kerb-map now detects the
+  hardened-estate signature (every transport rejected with
+  `strongerAuthRequired` / TLS-handshake-reset-class errors) and
+  surfaces an actionable hint with workarounds (LDAPS cert, scan
+  from a Windows host). Negative path pinned: ordinary socket
+  failures don't trigger the hint.
+
+- **BadSuccessor schema-presence gate** (#47). The dMSA module gated
+  on FL = 10 only. A Server 2025 forest in `WinThreshold` mode (a
+  legitimate forest-upgrade transition state) has the dMSA schema
+  class but FL < 10 — old code skipped, missing real dMSA abuse
+  paths. New gate uses `_has_dmsa_schema()` mirroring the pattern
+  `gmsa_kds._inventory_dmsas()` already uses.
+
+### Other kerb-map fixes (lab E2E + bug-class grep)
+
+- **User ACL findings silently dropped from BH CE export** (#43).
+  The exporter only matched `attack.startswith("Tier-0 ACL:")`; User
+  ACL findings have `attack="User ACL: ..."` and the same data
+  shape. Result: every lateral-movement edge the User ACL module
+  identified was invisible to BH CE operators — neither folded into
+  Aces nor present in the sidecar. Fixed by adding the matching
+  branch.
+
+- **HygieneResult.finding_count() inconsistent defaults** (#43).
+  FGPP defaulted *pessimistic* (empty `{}` → +1 finding), LAPS /
+  krbtgt defaulted *optimistic* (empty `{}` → 0). Empty
+  `HygieneResult()` reported "1 hygiene finding" through the
+  reporter on a half-built result. Fix: every dict-shaped sub-result
+  needs a truthy guard before its threshold check.
+
+- **`--resume` state created AFTER the SNTP probe** (#43). Order was
+  LDAP-bind → SNTP probe (up to 5s) → ResumeState.new(). Ctrl-C /
+  network hiccup during the probe discarded the scan with no
+  resumable id. Reordered so the resume state is allocated
+  immediately after a successful bind.
+
+- **Hygiene auditor used CN-based group lookups** (#43).
+  `(cn=Domain Admins)` returns nothing on a German `Domänen-Admins`
+  AD → every adminCount=1 user reported as orphan; FGPP audit always
+  says "not covering privileged". Refactored to SID-based lookups
+  (the pattern `tier0_acl` already uses).
+
+### Lab-seed bugs (PowerShell + Windows AD specifics)
+
+Five seed bugs surfaced when porting the Samba seed to PowerShell on
+real Windows DCs. Documented for anyone using
+`lab/win/seed_vulnerabilities.ps1`:
+
+1. `dsacls.exe` schema-name vs display-name. `DS-Replication-Get-
+   Changes` returns "No GUID Found"; needs `Replicating Directory
+   Changes`. Without the fix, seed never grants `svc_old_admin`
+   DCSync (#44).
+2. AdminSDHolder/SDProp wipes seeded ACEs the moment `bob_da` is
+   added to Domain Admins. Modify AdminSDHolder template directly +
+   trigger `RunProtectAdminGroupsTask` so SDProp propagates the grant
+   to all protected accounts (#44).
+3. Em-dash mangling — `New-ADUser -Description "SQL svc — pw=..."`
+   stored as `"SQL svc \x83?"` because the .ps1 was read as
+   Windows-1252. ASCII dashes + UTF-8 BOM (#44).
+4. `${env:USERDOMAIN}\user` parses wrong inside dsacls grants;
+   needs `$($env:USERDOMAIN)\user` (#44).
+5. Backtick-newline continuations broke under CRLF line endings.
+   PowerShell wants backtick + LF, gets backtick + CRLF. Collapsed
+   multi-line `New-ADUser` calls to single lines (#44).
+
+### Lab additions
+
+- `lab/Vagrantfile.win2022` + `lab/win/promote_dc.ps1` +
+  `lab/win/seed_vulnerabilities.ps1` — bring up `kerb-lab-dc22`
+  (192.168.57.22) on `kerblab2022.local`. Boots → host-driven
+  promotion via WinRM → seed plants every v1+v2 attack-surface vuln.
+  Seed `$Realm` auto-detects from `Get-ADDomain` so the same script
+  works against any kerblab*.local lab.
+- `lab/Vagrantfile.win2022-rodc` + `lab/win/promote_rodc.ps1` —
+  bring up `kerb-lab-rodc22` (192.168.57.23) as a Read-Only Domain
+  Controller of `kerblab2022.local`. Two-stage promotion. **Note**:
+  the RODC promotion has a known race against the optional-features
+  replication step that consistently fails; the kerb-map RODC
+  detection (#45) is unit-pinned, integration positive path remains
+  blocked on Windows-side debugging.
+- `lab/Vagrantfile.win2025` + `lab/win/promote_dc25.ps1` — bring up
+  `kerb-lab-dc25` (192.168.57.25) on `kerblab2025.local` (Server
+  2025). Confirms kerb-map's hardened-LDAP hint fires correctly out
+  of the box (Server 2025 enforces signing by default).
+- `lab/seed_vulnerabilities.sh` — `STUB_COUNT` env var (default
+  1500). Set `STUB_COUNT=5000` to seed an estate-sized lab. Scaling
+  baseline: `--all --v2` runs in 28s on 4769 users (sub-linear vs
+  10s on 1500).
+
+### Performance + scale
+
+- 5k-user Samba lab: `--all --v2` → 28s wall, 142 KB compressed
+  zip. Sub-linear scaling vs the prior 1500-user / 10s baseline.
+
+### Breaking? No
+
+- Output JSON / BH CE schema unchanged.
+- All flag semantics preserved.
+- New banner / hint messages are additive (existing log lines unchanged).
+
 ## [1.2.1] — 2026-04
 
 Lab-driven iteration release. Stand up a Samba 4 AD lab, ingest into a

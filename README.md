@@ -4,7 +4,7 @@
 
 **Active Directory Kerberos Attack Surface Mapper**
 
-![version](https://img.shields.io/badge/version-1.2.1-blue)
+![version](https://img.shields.io/badge/version-1.3.0-blue)
 ![status](https://img.shields.io/badge/status-BETA-orange)
 ![python](https://img.shields.io/badge/python-3.10+-blue)
 ![platform](https://img.shields.io/badge/platform-Linux-lightgrey)
@@ -14,12 +14,11 @@
 
 ## Status: BETA — read before pointing at production
 
-v1.2.1 is **code-feature-complete and lab-validated, not battle-tested**.
-The tool has been exercised against exactly two domains so far: one
-Server 2019 (the culling-game lab) and one Samba 4 vagrant lab.
-Each environment touched has surfaced 3–10 silent-failure bugs that
-the unit tests didn't catch (PRs #29–#42). Expect to find more on
-yours.
+v1.3.0 is **code-feature-complete and lab-validated across five
+environments**: Samba 4 (default + 5k-user scale + signing-required),
+real Server 2022 (default + hardened-GPO), and real Server 2025. Each
+new environment surfaced 1–6 silent-failure bugs the prior cycle
+couldn't see (PRs #29–#47). Expect more on yours.
 
 Five things an operator should know before scanning a real estate:
 
