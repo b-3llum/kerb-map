@@ -203,6 +203,16 @@ fi
 # Tier-0 account to fire, not enable an actual takeover).
 st user create da_alice "$SEED_PASS" || true
 st group addmembers 'Domain Admins' da_alice || true
+# Same AdminSDHolder-pin trick as bob_da below — Samba's
+# AdminSDHolder process runs every 60min, so a freshly-added DA
+# member won't have adminCount set during the first scan. Without
+# this, the Shadow Credentials inventory (which only reports on
+# adminCount=1 accounts) misses da_alice's seeded KCL — exactly the
+# CRITICAL finding the seed exists to validate.
+ldbmod "dn: CN=da_alice,CN=Users,${DOMAIN_BASE_DN}
+changetype: modify
+replace: adminCount
+adminCount: 1" || true
 ldbmod "dn: CN=da_alice,CN=Users,${DOMAIN_BASE_DN}
 changetype: modify
 replace: msDS-KeyCredentialLink

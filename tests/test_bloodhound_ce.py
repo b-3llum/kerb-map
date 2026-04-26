@@ -193,8 +193,8 @@ def test_dcsync_finding_emits_kerbmap_dcsyncby_edge(tmp_path):
     )])
     out = exporter.export(str(tmp_path / "scan.zip"))
     with zipfile.ZipFile(out) as zf:
-        edges = json.loads(zf.read("kerbmap_edges.json"))
-    assert edges["meta"]["type"] == "kerbmap_edges"
+        edges = json.loads(zf.read("_kerbmap_metadata.json"))
+    assert edges["meta"]["type"] == "kerbmap_metadata"
     edge = edges["data"][0]
     assert edge["edge"]   == "KerbMapDCSyncBy"
     assert edge["source"] == "S-1-5-21-10-20-30-1234"
@@ -216,7 +216,7 @@ def test_shadow_creds_write_finding_emits_addkeycredentiallink_edge(tmp_path):
     )])
     out = exporter.export(str(tmp_path / "scan.zip"))
     with zipfile.ZipFile(out) as zf:
-        edges = json.loads(zf.read("kerbmap_edges.json"))
+        edges = json.loads(zf.read("_kerbmap_metadata.json"))
     assert edges["data"][0]["edge"] == "KerbMapAddKeyCredentialLink"
     assert edges["data"][0]["source"] == "S-1-5-21-10-20-30-1500"
 
@@ -236,7 +236,7 @@ def test_badsuccessor_writable_ou_finding_emits_cancreatedmsa_edge(tmp_path):
     )])
     out = exporter.export(str(tmp_path / "scan.zip"))
     with zipfile.ZipFile(out) as zf:
-        edges = json.loads(zf.read("kerbmap_edges.json"))
+        edges = json.loads(zf.read("_kerbmap_metadata.json"))
     assert edges["data"][0]["edge"] == "KerbMapCanCreateDMSA"
 
 
@@ -249,7 +249,7 @@ def test_no_extra_edges_means_no_kerbmap_edges_file(tmp_path):
     )
     out = exporter.export(str(tmp_path / "scan.zip"))
     with zipfile.ZipFile(out) as zf:
-        assert "kerbmap_edges.json" not in zf.namelist()
+        assert "_kerbmap_metadata.json" not in zf.namelist()
 
 
 def test_findings_without_required_data_are_skipped(tmp_path):
@@ -265,7 +265,7 @@ def test_findings_without_required_data_are_skipped(tmp_path):
     )])
     out = exporter.export(str(tmp_path / "scan.zip"))
     with zipfile.ZipFile(out) as zf:
-        assert "kerbmap_edges.json" not in zf.namelist()
+        assert "_kerbmap_metadata.json" not in zf.namelist()
 
 
 # ─────────────────────────── new v2 modules → edges ────────────
@@ -281,7 +281,7 @@ def _exporter():
 
 def _read_edges(zip_path):
     with zipfile.ZipFile(zip_path) as zf:
-        return json.loads(zf.read("kerbmap_edges.json"))["data"]
+        return json.loads(zf.read("_kerbmap_metadata.json"))["data"]
 
 
 def test_esc9_finding_emits_kerbmap_esc9_edge(tmp_path):
@@ -481,7 +481,7 @@ def test_tier0_acl_finding_without_writer_sid_skipped(tmp_path):
     out = exp.export(str(tmp_path / "broken.zip"))
     with zipfile.ZipFile(out) as zf:
         # No edges file — the broken finding was skipped silently.
-        assert "kerbmap_edges.json" not in zf.namelist()
+        assert "_kerbmap_metadata.json" not in zf.namelist()
 
 
 # ───────────── OU computer-create findings → KerbMapCreateComputerOu ────
