@@ -14,22 +14,31 @@ Each follows the BloodHound CE collector format:
   Properties, Aces, plus type-specific arrays (Members for groups,
   HasSIDHistory for users, etc.)
 
-kerb-map findings emit *custom edges* on top of the standard collector
-output — these surface as new edge types in the BloodHound UI:
+kerb-map findings ship in a sidecar ``_kerbmap_metadata.json`` inside
+the same zip — NOT as BH-CE-renderable graph edges (yet). The
+sidecar is for kerb-chain / external tooling; BH CE skips it during
+ingest because the underscore-prefixed name doesn't match a known
+SharpHound type.
 
-| Edge                | Source         | Target            | When |
-|---|---|---|---|
-| ``KerbMapKerberoastable`` | User    | (none — flag)     | SPN scanner finding |
-| ``KerbMapASREPRoastable`` | User    | (none — flag)     | AS-REP scanner |
-| ``KerbMapAllowedToDelegate`` | Computer | Computer       | Delegation mapper |
-| ``KerbMapDCSyncBy``       | Domain  | User              | DCSync rights module |
-| ``KerbMapHasShadowCreds`` | User    | (none — flag)     | Shadow Credentials |
-| ``KerbMapBadSuccessor``   | dMSA    | User (predecessor) | BadSuccessor |
+Field bug from a real BH CE 5.x ingest (verified end-to-end against
+a running container): the previous shape — a top-level
+``kerbmap_edges.json`` with ``meta.type="kerbmap_edges"`` — caused
+BH CE to reject the *entire upload* with HTTP 500 + "no valid meta
+tag found". BH CE's ingester only accepts the canonical SharpHound
+types (users / computers / groups / domains / gpos / ous /
+containers / aiacas / rootcas / etc.).
 
-These don't replace BH's native edges (HasSession, AdminTo, etc.) —
-they're additional context the SharpHound/AzureHound collectors don't
-produce. Operators see "find a path from owned to DA" the usual way,
-plus a "show me kerb-map's CRITICAL findings as graph nodes" lens.
+The right long-term fix is to fold each finding into the affected
+node's ``Aces`` array using a SharpHound-recognised ``RightName``
+(e.g. ``GenericAll``, ``WriteDacl``, ``AddKeyCredentialLink``,
+``GetChangesAll``). That's tracked as a v1.2.x follow-up; doing it
+right needs per-finding mapping + node-side merge logic.
+
+The 4 standard JSONs (users/computers/groups/domains) DO ingest
+cleanly — verified by Cypher queries against the loaded graph
+(operators can use BH CE's normal pathfinding immediately, just
+without the KerbMap-specific edges). Sidecar gives kerb-chain a
+machine-readable view of what kerb-map found for orchestration.
 
 Reference: https://bloodhound.specterops.io/collect-data/json-formats
 """
@@ -274,15 +283,33 @@ class BloodHoundCEExporter:
             zf.writestr("computers.json", json.dumps(_wrap("computers", computers), indent=2))
             zf.writestr("groups.json",    json.dumps(_wrap("groups",    groups), indent=2))
             zf.writestr("domains.json",   json.dumps(_wrap("domains",   domains), indent=2))
+            # Field bug from a real BH CE 5.x ingest: emitting our
+            # findings as a top-level "kerbmap_edges.json" with
+            # meta.type="kerbmap_edges" caused BH CE to reject the
+            # *entire* file with HTTP 500 + "no valid meta tag found"
+            # — BH CE's ingester only accepts the canonical SharpHound
+            # types (users/computers/groups/domains/gpos/ous/
+            # containers/aiacas/rootcas/etc.). Folding our findings
+            # into per-node ``Aces`` arrays is the right long-term fix
+            # (tracked as v1.2.x follow-up); for now we write the
+            # findings to a sidecar with a name BH CE doesn't try to
+            # ingest, so the zip is fully ingestible AND the operator
+            # / external tooling (kerb-chain) can still read the raw
+            # KerbMap* edges from the zip.
             if self._extra_edges:
                 zf.writestr(
-                    "kerbmap_edges.json",
+                    "_kerbmap_metadata.json",
                     json.dumps({
                         "meta": {
-                            "type":             "kerbmap_edges",
+                            "type":             "kerbmap_metadata",
                             "count":            len(self._extra_edges),
                             "version":          SCHEMA_VERSION,
                             "collectorversion": COLLECTOR_VERSION,
+                            "_note": (
+                                "Sidecar, not BH CE-ingestible. "
+                                "Per-node Aces folding is the long-term "
+                                "fix; see docs/v1.2-known-gaps.md."
+                            ),
                         },
                         "data": self._extra_edges,
                     }, indent=2),
@@ -291,7 +318,7 @@ class BloodHoundCEExporter:
         log.success(
             f"BloodHound CE zip → {out.resolve()} "
             f"({len(users)} users, {len(computers)} computers, "
-            f"{len(groups)} groups, {len(self._extra_edges)} kerb-map edges)"
+            f"{len(groups)} groups; {len(self._extra_edges)} kerb-map edges in sidecar)"
         )
         return out
 
