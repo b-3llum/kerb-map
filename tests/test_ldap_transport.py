@@ -117,6 +117,53 @@ def test_all_transports_failing_raises(monkeypatch):
         _build(monkeypatch, behaviour)
 
 
+def test_hardened_estate_bind_failure_surfaces_actionable_hint(monkeypatch):
+    """Field gap from the v1.3 sprint hardened-GPO test: with
+    ``LDAPServerIntegrity = 2`` (Require signing) on the DC, every
+    transport fails — TLS handshakes get reset (no LDAPS cert), plain
+    NTLM gets ``strongerAuthRequired``. ldap3's GSSAPI SASL bind
+    hard-codes ``NO_SECURITY_LAYER`` so signing-required estates can't
+    be bound. Without an actionable hint the operator just sees a
+    cryptic per-transport error chain.
+
+    Pin that the LDAPAuthError carries a hint mentioning ``signed``
+    bind requirement and at least one workaround so a refactor
+    doesn't silently drop it."""
+    from ldap3.core.exceptions import LDAPBindError
+
+    def behaviour(transport):
+        if transport in (TRANSPORT_LDAPS, TRANSPORT_LDAPS_SIMPLE):
+            raise LDAPSocketOpenError(
+                "socket ssl wrapping error: [Errno 104] Connection reset by peer"
+            )
+        if transport == TRANSPORT_STARTTLS:
+            raise LDAPSocketOpenError("startTLS failed - unavailable")
+        # plain (NTLM) → signing required → strongerAuthRequired
+        raise LDAPBindError(
+            "automatic bind not successful - strongerAuthRequired"
+        )
+
+    with pytest.raises(LDAPAuthError) as ei:
+        _build(monkeypatch, behaviour)
+    msg = str(ei.value).lower()
+    assert "signed" in msg
+    assert "ldaps cert" in msg or "ldaps" in msg
+
+
+def test_normal_socket_failures_do_not_get_hardened_hint(monkeypatch):
+    """Negative path: when the chain fails for ordinary reasons
+    (DC down, wrong port, etc.), don't surface the hardened-LDAP hint
+    — that would mislead the operator into chasing a non-issue."""
+    def behaviour(transport):
+        raise LDAPSocketOpenError(f"{transport}: no route to host")
+
+    with pytest.raises(LDAPAuthError) as ei:
+        _build(monkeypatch, behaviour)
+    msg = str(ei.value).lower()
+    assert "no route to host" in msg
+    assert "signed" not in msg  # no spurious hardened-estate hint
+
+
 def test_ldaps_simple_succeeds_when_ntlm_paths_rejected(monkeypatch):
     """Samba-AD-DC compat path: NTLM-flavoured transports (LDAPS,
     StartTLS, plain) get session-terminated by Samba's LDAP service
