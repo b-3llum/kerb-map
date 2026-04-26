@@ -30,15 +30,15 @@ Five things an operator should know before scanning a real estate:
    multiplier is dominated by ACL-walking modules; it may balloon on
    ACE-rich production objects.
 
-2. **Hardened-LDAP estates currently fail to bind.** Estates that
-   require LDAP signing + channel binding (modern Server 2022/2025
-   defaults, signing-required Samba) hit `strongerAuthRequired` on
-   every transport because ldap3's SASL Kerberos bind doesn't set
-   signing flags. Tracked as a v1.2.x follow-up; until that lands,
-   kerb-map runs against permissive-LDAP estates only. The
-   LDAPS-SIMPLE fallback added in PR #38 covers the typical Windows
-   AD case (Server 2019/2022 with default "LDAP server signing
-   requirements = None") but not the hardened path.
+2. **Hardened-LDAP partial:** *signing-required* estates work via
+   the LDAPS-SIMPLE fallback (PR #38) — TLS satisfies the strong-auth
+   check. Validated end-to-end against a Samba 4 DC with
+   `ldap server require strong auth = yes`: TLSv1.3 SIMPLE bind
+   succeeds and `--all` runs cleanly. *Channel-binding-required*
+   estates (Windows "LDAP server channel binding token requirements
+   = Always") are still untested — ldap3 doesn't generate CBT for
+   SIMPLE binds, so this likely fails and would need a real Windows
+   DC with the GPO set to confirm + fix.
 
 3. **Server 2022 / 2025 forests are unvalidated.** Lab is Server 2019
    + Samba 4. Samba lacks the dMSA / Server-2025-only schema classes,
