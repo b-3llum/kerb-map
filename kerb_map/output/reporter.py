@@ -76,6 +76,26 @@ def print_domain_info(info: dict[str, Any]):
 
     for item in items:
         console.print(f"  {item}")
+
+    # RODC warning: if the bound DC is a Read-Only Domain Controller,
+    # several findings can be silently incomplete (DCSync rights audit
+    # walks the DACL of the partial NTDS replica; Shadow Credentials
+    # inventory only sees cached principals; etc.). The operator should
+    # know to re-bind to a writable DC for completeness.
+    if info.get("is_rodc"):
+        console.print(
+            "  [bold yellow]⚠  RODC detected[/bold yellow] — bound DC holds a "
+            "*partial* NTDS replica."
+        )
+        console.print(
+            "    Findings that walk the DACL or read secrets (DCSync rights, "
+            "Shadow Credentials, ASRep/Kerberoast hash retrieval) may be "
+            "incomplete."
+        )
+        console.print(
+            "    Re-bind to a writable DC (look for any DC where this "
+            "warning does NOT appear) for full coverage."
+        )
     console.print()
 
 
