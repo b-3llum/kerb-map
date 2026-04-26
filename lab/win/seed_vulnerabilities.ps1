@@ -1,11 +1,11 @@
-# lab/win/seed_vulnerabilities.ps1 — Stage 2: plant the v1+v2
+﻿# lab/win/seed_vulnerabilities.ps1 - Stage 2: plant the v1+v2
 # attack-surface vulns parallel to lab/seed_vulnerabilities.sh
 # (Samba lab). Same finding set, real Windows AD this time so we
 # also catch:
-#   - dMSA (msDS-DelegatedManagedServiceAccount) — Server 2025 schema
+#   - dMSA (msDS-DelegatedManagedServiceAccount) - Server 2025 schema
 #     not present here, so BadSuccessor module will see "no dMSAs"
 #     (correct empty result on Server 2022)
-#   - Real ADCS templates / CA — only if AD CS is installed (this
+#   - Real ADCS templates / CA - only if AD CS is installed (this
 #     script skips it; ADCS validation gets its own lab box)
 #   - Real GPP cpassword XMLs in SYSVOL with Windows-side ACL caps
 #
@@ -25,29 +25,22 @@ Import-Module ActiveDirectory -ErrorAction Stop
 function New-SeedUser {
     param([string]$Name, [string]$Description = "")
     try {
-        New-ADUser `
-            -Name $Name `
-            -SamAccountName $Name `
-            -UserPrincipalName "$Name@$Realm" `
-            -AccountPassword $SeedPass `
-            -Enabled $true `
-            -PasswordNeverExpires $true `
-            -Description $Description `
-            -ErrorAction Stop
+        New-ADUser -Name $Name -SamAccountName $Name -UserPrincipalName "$Name@$Realm" -AccountPassword $SeedPass -Enabled $true -PasswordNeverExpires $true -Description $Description -ErrorAction Stop
         Write-Host "[seed] created user $Name"
     } catch {
         if ($_.Exception.Message -match "already exists") {
-            Write-Host "[seed] user $Name exists — skipping"
+            Write-Host "[seed] user $Name exists - skipping"
         } else {
-            Write-Host "[seed] WARN creating $Name: $($_.Exception.Message)"
+            $msg = $_.Exception.Message
+            Write-Host "[seed] WARN creating ${Name}: $msg"
         }
     }
 }
 
 Write-Host "[seed] starting at $(Get-Date -Format o)"
 
-# ── v1 — SPN scanner ────────────────────────────────────────────────
-# svc_sql — MSSQLSvc SPN, weak password, RC4 only
+# ── v1 - SPN scanner ────────────────────────────────────────────────
+# svc_sql - MSSQLSvc SPN, weak password, RC4 only
 New-SeedUser -Name "svc_sql" -Description "SQL service account"
 try { Set-ADUser svc_sql -ServicePrincipalNames @{Add="MSSQLSvc/sql01.$Realm:1433"} -ErrorAction Stop } catch {}
 try { Set-ADUser svc_sql -KerberosEncryptionType "RC4" -ErrorAction Stop } catch {}
@@ -55,32 +48,32 @@ try { Set-ADUser svc_sql -KerberosEncryptionType "RC4" -ErrorAction Stop } catch
 New-SeedUser -Name "svc_iis" -Description "IIS service account"
 try { Set-ADUser svc_iis -ServicePrincipalNames @{Add="HTTP/web01.$Realm"} -ErrorAction Stop } catch {}
 
-# ── v1 — AS-REP scanner ─────────────────────────────────────────────
-# oldsvc — DONT_REQUIRE_PREAUTH (legacy NIS-style account)
+# ── v1 - AS-REP scanner ─────────────────────────────────────────────
+# oldsvc - DONT_REQUIRE_PREAUTH (legacy NIS-style account)
 New-SeedUser -Name "oldsvc" -Description "Legacy account, pre-auth disabled"
 try { Set-ADAccountControl oldsvc -DoesNotRequirePreAuth $true -ErrorAction Stop } catch {}
 
-# ── v1 — Delegation mapper ──────────────────────────────────────────
-# web01$ — Unconstrained Delegation (TRUSTED_FOR_DELEGATION)
+# ── v1 - Delegation mapper ──────────────────────────────────────────
+# web01$ - Unconstrained Delegation (TRUSTED_FOR_DELEGATION)
 try {
     New-ADComputer -Name "WEB01" -SamAccountName "WEB01$" -Enabled $true -ErrorAction Stop
 } catch { if ($_.Exception.Message -notmatch "already exists") { Write-Host "WARN: $($_.Exception.Message)" } }
 try { Set-ADAccountControl WEB01$ -TrustedForDelegation $true -ErrorAction Stop } catch {}
 
-# ── v1 — User enumerator / hygiene ──────────────────────────────────
-# admin_orphan — adminCount=1 but no protected group membership
+# ── v1 - User enumerator / hygiene ──────────────────────────────────
+# admin_orphan - adminCount=1 but no protected group membership
 New-SeedUser -Name "admin_orphan" -Description "Orphaned admin flag"
 try { Set-ADUser admin_orphan -Replace @{adminCount=1} -ErrorAction Stop } catch {}
 
-# cred_in_desc — pw= shorthand (closes the gap-#9 regression we fixed)
-New-SeedUser -Name "svc_app" -Description "SQL svc — pw=Spring2024! rotate quarterly"
+# cred_in_desc - pw= shorthand (closes the gap-#9 regression we fixed)
+New-SeedUser -Name "svc_app" -Description "SQL svc - pw=Spring2024! rotate quarterly"
 
-# ── v1 — Encryption auditor ─────────────────────────────────────────
-# des_user — USE_DES_KEY_ONLY
+# ── v1 - Encryption auditor ─────────────────────────────────────────
+# des_user - USE_DES_KEY_ONLY
 New-SeedUser -Name "des_user" -Description "DES-only encryption (legacy)"
 try { Set-ADUser des_user -KerberosEncryptionType "DES" -ErrorAction Stop } catch {}
 
-# ── v1 — Paging (5000 stub users) ───────────────────────────────────
+# ── v1 - Paging (5000 stub users) ───────────────────────────────────
 # Real Windows AD; New-ADUser is faster than samba-tool but still
 # ~50-100ms each → 5000 users ≈ 5-8 min. Idempotent: skip if user5000
 # already exists.
@@ -92,11 +85,7 @@ if (-not $exists) {
     for ($i = 1; $i -le $stubCount; $i++) {
         $n = "user{0:D4}" -f $i
         try {
-            New-ADUser -Name $n -SamAccountName $n `
-                -UserPrincipalName "$n@$Realm" `
-                -AccountPassword $SeedPass `
-                -Enabled $true -PasswordNeverExpires $true `
-                -Description "Stub user #$i" -ErrorAction Stop
+            New-ADUser -Name $n -SamAccountName $n -UserPrincipalName "$n@$Realm" -AccountPassword $SeedPass -Enabled $true -PasswordNeverExpires $true -Description "Stub user #$i" -ErrorAction Stop
         } catch {}
     }
     Write-Host "[seed] stub users done."
@@ -104,36 +93,56 @@ if (-not $exists) {
     Write-Host "[seed] stub users already present (last=$lastStub)."
 }
 
-# ── v2 — DCSync rights backdoor ─────────────────────────────────────
-# svc_old_admin — granted DS-Replication-Get-Changes / Get-Changes-All
+# ── v2 - DCSync rights backdoor ─────────────────────────────────────
+# svc_old_admin - granted DS-Replication-Get-Changes / Get-Changes-All
 # on the domain root via DSACLS. Same effect as samba-tool dsacl set.
 New-SeedUser -Name "svc_old_admin" -Description "Legacy account with DCSync grant"
-$svcDn = (Get-ADUser svc_old_admin).DistinguishedName
+# dsacls.exe wants the *display names* of the extended rights, not the
+# schema CN — "DS-Replication-Get-Changes" returns "No GUID Found".
+# Field bug from the v1.3 sprint Win22 validation (kerb-map silently
+# reported zero DCSync rights against this lab because the seed never
+# actually applied the ACE). Use the friendly display names that
+# dsacls recognises.
 foreach ($right in @(
-    "DS-Replication-Get-Changes",
-    "DS-Replication-Get-Changes-All",
-    "DS-Replication-Get-Changes-In-Filtered-Set"
+    "Replicating Directory Changes",
+    "Replicating Directory Changes All",
+    "Replicating Directory Changes In Filtered Set"
 )) {
-    & dsacls.exe $BaseDN /G "${env:USERDOMAIN}\svc_old_admin:CA;$right" 2>&1 | Out-Null
+    & dsacls.exe $BaseDN /G "$($env:USERDOMAIN)\svc_old_admin:CA;$right" 2>&1 | Out-Null
 }
 
-# ── v2 — Shadow Credentials ─────────────────────────────────────────
-# bob_da — Domain Admin (so Shadow Credentials inventory flags it)
-# helpdesk_op — has WriteProperty on bob_da's msDS-KeyCredentialLink
-New-SeedUser -Name "bob_da" -Description "Domain admin — KCL writable by helpdesk"
+# ── v2 - Shadow Credentials ─────────────────────────────────────────
+# bob_da - Domain Admin (so Shadow Credentials inventory flags it)
+# helpdesk_op - has WriteProperty on bob_da's msDS-KeyCredentialLink
+New-SeedUser -Name "bob_da" -Description "Domain admin - KCL writable by helpdesk"
 try { Add-ADGroupMember -Identity "Domain Admins" -Members bob_da -ErrorAction Stop } catch {}
 try { Set-ADUser bob_da -Replace @{adminCount=1} -ErrorAction Stop } catch {}
 
 New-SeedUser -Name "helpdesk_op" -Description "Helpdesk operator with KCL write"
-# Grant helpdesk_op WriteProperty on bob_da's msDS-KeyCredentialLink
+# Grant helpdesk_op WriteProperty on bob_da's msDS-KeyCredentialLink.
+#
+# Field bug from the v1.3 sprint Win22 validation: a direct ACE on
+# bob_da gets wiped by AdminSDHolder/SDProp, which fires automatically
+# when bob_da is added to Domain Admins (and again every 60 min). The
+# real-world fix is to modify AdminSDHolder's DACL itself — SDProp
+# then propagates the helpdesk_op ACE to every protected account on
+# the next cycle. Setting it on the AdminSDHolder template *and* on
+# bob_da gives both immediate effect and persistence.
 $bobDn = (Get-ADUser bob_da).DistinguishedName
-& dsacls.exe $bobDn /G "${env:USERDOMAIN}\helpdesk_op:WP;msDS-KeyCredentialLink" 2>&1 | Out-Null
+$adminSdhDn = "CN=AdminSDHolder,CN=System,$BaseDN"
+foreach ($dn in @($bobDn, $adminSdhDn)) {
+    & dsacls.exe $dn /G "$($env:USERDOMAIN)\helpdesk_op:WP;msDS-KeyCredentialLink" 2>&1 | Out-Null
+}
+# Trigger SDProp to immediately propagate (otherwise wait ≤60 min).
+$rootDse = [ADSI]"LDAP://RootDSE"
+$rootDse.Put("RunProtectAdminGroupsTask", 1)
+$rootDse.SetInfo()
 
-# ── v2 — Tier-0 ACL audit ───────────────────────────────────────────
+# ── v2 - Tier-0 ACL audit ───────────────────────────────────────────
 # Account Operators already has WriteDACL on protected groups by
-# Windows default — Tier-0 ACL audit will surface this without seeding.
+# Windows default - Tier-0 ACL audit will surface this without seeding.
 
-# ── v1 — GPP cpassword (MS14-025) ───────────────────────────────────
+# ── v1 - GPP cpassword (MS14-025) ───────────────────────────────────
 # Drop a Groups.xml under the Default Domain Policy GPO with
 # Password1! encrypted via the MS-published key. Same payload as
 # the Samba seed.
@@ -151,7 +160,7 @@ $xml = @'
     <Properties action="U"
                 newName=""
                 fullName="Helpdesk Admin"
-                description="Local admin pushed via GPP — pre-MS14-025"
+                description="Local admin pushed via GPP - pre-MS14-025"
                 cpassword="VPe/o9YRyz2cksnYRbNeQunV3jqnKFX4lk/mmt8mza8"
                 changeLogon="0"
                 noChange="0"

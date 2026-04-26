@@ -69,12 +69,24 @@ ACE_TYPE_DENIED_OBJECT   = 0x06
 
 # Well-known SIDs that "should" have dangerous rights — used to filter
 # out the noise so the operator only sees real misconfigurations.
+#
+# Field bug from the v1.3 sprint Win22 validation: ``Key Admins``
+# (-526) and ``Enterprise Key Admins`` (-527) are built-in groups
+# whose entire *purpose* is to write msDS-KeyCredentialLink on
+# privileged accounts (Windows Hello for Business / passwordless).
+# Without these in the suffix list, the Shadow Credentials module
+# fires CRITICAL on every Windows DC for the Key Admins group on
+# every adminCount=1 user — a constant false positive that drowns
+# the real findings. Samba 4 doesn't ship these groups so the bug
+# stayed hidden until Win22 testing.
 WELL_KNOWN_PRIVILEGED_SIDS_SUFFIX = {
     "-512",  # Domain Admins
     "-516",  # Domain Controllers
     "-518",  # Schema Admins
     "-519",  # Enterprise Admins
     "-521",  # Read-only Domain Controllers
+    "-526",  # Key Admins (Windows Hello for Business)
+    "-527",  # Enterprise Key Admins
 }
 WELL_KNOWN_PRIVILEGED_SIDS_FULL = {
     "S-1-5-18",       # LocalSystem
