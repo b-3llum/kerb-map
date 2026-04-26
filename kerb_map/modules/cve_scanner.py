@@ -33,12 +33,20 @@ class CVEScanner:
 
     AGGRESSIVE_CHECKS = (ZeroLogon, PrintNightmare, PetitPotam)
 
-    def __init__(self, ldap_client, dc_ip, domain):
+    def __init__(self, ldap_client, dc_ip, domain,
+                 *, username: str | None = None,
+                 password: str | None = None,
+                 nthash: str | None = None,
+                 use_kerberos: bool = False):
         self.ldap   = ldap_client
         self.dc_ip  = dc_ip
         self.domain = domain
-        self._safe  = [c(ldap_client, dc_ip, domain) for c in self.SAFE_CHECKS]
-        self._loud  = [c(ldap_client, dc_ip, domain) for c in self.AGGRESSIVE_CHECKS]
+        creds = dict(username=username, password=password,
+                     nthash=nthash, use_kerberos=use_kerberos)
+        self._safe  = [c(ldap_client, dc_ip, domain, **creds)
+                       for c in self.SAFE_CHECKS]
+        self._loud  = [c(ldap_client, dc_ip, domain, **creds)
+                       for c in self.AGGRESSIVE_CHECKS]
 
     def run(
         self,
