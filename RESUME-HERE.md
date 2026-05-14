@@ -176,8 +176,14 @@ without a new signal:
 
 ## Cleanup state
 
-This session left:
-- Working tree clean (only pre-existing untracked items).
-- All branches in sync with origin.
+Sessions through v1.3.1 left:
+- Working tree clean (only pre-existing `files/` and `up.pid` untracked).
+- **Origin pruned to `main` only.** 15 merged feature branches (all
+  squash-merge artefacts of closed PRs #18–#38) deleted from origin
+  after v1.3.1 shipped. PRs preserve every deleted branch's diff +
+  tip commit on GitHub permanently, so nothing's lost — just less
+  noise in the branch dropdown.
+- 4 version tags kept: `v1.2.0`, `v1.2.1`, `v1.3.0`, `v1.3.1`.
+  `v1.2.1` anchors the only GitHub Release object.
 - No leftover Python loops, vagrant ssh sessions, monitor processes.
 - VirtualBox VMs powered off (disks intact for resume).
