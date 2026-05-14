@@ -28,7 +28,11 @@ classifiers = [
     "Topic :: System :: Networking",
 ]
 dependencies = [
-    "ldap3>=2.9.1",
+    # 2.10.2rc4 lands GSSAPI session encryption (upstream PR #1042) — the
+    # 2.9.1 line hard-coded NO_SECURITY_LAYER, so signing-required DCs
+    # rejected every transport. Pinning >= rc4 because upstream still
+    # ships the 2.10 line as RC, but it's been public since 2025.
+    "ldap3>=2.10.2rc4",
     "impacket>=0.11.0",
     "rich>=13.0.0",
     "PyYAML>=6.0",

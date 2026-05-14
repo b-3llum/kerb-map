@@ -4,7 +4,7 @@
 
 **Active Directory Kerberos Attack Surface Mapper**
 
-![version](https://img.shields.io/badge/version-1.3.0-blue)
+![version](https://img.shields.io/badge/version-1.3.1-blue)
 ![status](https://img.shields.io/badge/status-BETA-orange)
 ![python](https://img.shields.io/badge/python-3.10+-blue)
 ![platform](https://img.shields.io/badge/platform-Linux-lightgrey)
@@ -14,7 +14,7 @@
 
 ## Status: BETA — read before pointing at production
 
-v1.3.0 is **code-feature-complete and lab-validated across five
+v1.3.1 is **code-feature-complete and lab-validated across five
 environments**: Samba 4 (default + 5k-user scale + signing-required),
 real Server 2022 (default + hardened-GPO), and real Server 2025. Each
 new environment surfaced 1–6 silent-failure bugs the prior cycle
@@ -29,15 +29,16 @@ Five things an operator should know before scanning a real estate:
    multiplier is dominated by ACL-walking modules; it may balloon on
    ACE-rich production objects.
 
-2. **Hardened-LDAP partial:** *signing-required* estates work via
-   the LDAPS-SIMPLE fallback (PR #38) — TLS satisfies the strong-auth
-   check. Validated end-to-end against a Samba 4 DC with
-   `ldap server require strong auth = yes`: TLSv1.3 SIMPLE bind
-   succeeds and `--all` runs cleanly. *Channel-binding-required*
+2. **Hardened-LDAP partial:** *signing-required* estates have two
+   working paths now. The LDAPS-SIMPLE fallback (PR #38) binds via
+   TLSv1.3 on Samba 4 with `ldap server require strong auth = yes`,
+   and the SASL/Kerberos signed-and-sealed path (v1.3.1, with
+   `-k`) negotiates GSS-encrypted binds and is accepted by hardened
+   Windows DCs without an LDAPS cert. *Channel-binding-required*
    estates (Windows "LDAP server channel binding token requirements
    = Always") are still untested — ldap3 doesn't generate CBT for
-   SIMPLE binds, so this likely fails and would need a real Windows
-   DC with the GPO set to confirm + fix.
+   SIMPLE binds, so that path likely fails and would need a real
+   Windows DC with the GPO set to confirm + fix.
 
 3. **Server 2022 / 2025 forests are unvalidated.** Lab is Server 2019
    + Samba 4. Samba lacks the dMSA / Server-2025-only schema classes,

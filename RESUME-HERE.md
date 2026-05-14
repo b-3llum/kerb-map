@@ -5,12 +5,25 @@ next.
 
 ## Current state
 
-- **Latest tag**: `v1.3.0` (pushed to origin, CHANGELOG entry leads
-  with the four headline fixes operators should care about most).
+- **Latest tag**: `v1.3.1` (pushed to origin; v1.3.0 + the GSSAPI
+  signing-layer fix from v1.3.x follow-up #1 — hardened DCs now bind
+  for real instead of falling out via the hint).
 - **Branch**: `main`, clean working tree (only `files/` and `up.pid`
   are untracked, both pre-date this work).
-- **CI**: green on every PR through #47.
-- **Test count**: 691 pass / 2 skipped.
+- **CI**: green on every PR through #47 + the v1.3.1 follow-up PR.
+- **Test count**: 693 pass / 2 skipped.
+
+## What v1.3.1 shipped (this session)
+
+Closed v1.3.x follow-up #1: ldap3 2.10.2rc4 wired up the GSSAPI
+session-encryption kwarg upstream. kerb-map now passes
+`session_security=ENCRYPT` on the SIGNED transport when Kerberos is
+used, so hardened DCs accept the GSS-wrapped bind and every paged
+search after it. The v1.3.0 hint is split: hardened-DC + no `-k` →
+"re-run with `-k`"; hardened-DC + `-k` already on → klist / kinit
+/ SPN / krb5.conf pointers. Three new tests pin the kwarg, both hint
+paths, and that ENCRYPT is *not* set on TLS transports (no
+double-wrap). See `CHANGELOG.md` 1.3.1 section for the full diff.
 
 ## What v1.3.0 shipped
 
@@ -74,14 +87,20 @@ the specific blocker.
 ### dc25 LDAPS cert + signing-required bind
 - Server 2025 enforces LDAP signing at a layer below `LDAPServerIntegrity`
   registry — flipping the registry doesn't unhardened it.
-- **Pickup path**: install AD CS on dc25 + auto-enroll the LDAPS cert,
-  OR scan from a Windows host. Both lab-side. The kerb-map hint
-  message (PR #46) correctly fires; that's the deliverable.
+- **Pickup path**: with v1.3.1 in hand, `kerb-map --all --v2 -k` against
+  dc25 should now bind via SASL/Kerberos + GSS encryption. Pre-reqs:
+  `kinit Administrator@KERBLAB2025.LOCAL`, `krb5.conf` pointing at
+  dc25 as the KDC, `ldap/dc25.kerblab2025.local` SPN present (default).
+  If the signed bind still fails, install AD CS on dc25 + auto-enroll
+  the LDAPS cert OR scan from a Windows host. Hint paths (PR #46 +
+  v1.3.1) cover both directions.
 
 ### dc25 vs Samba v2-plugin diff
-- Couldn't run because of the bind issue above. The BadSuccessor
-  schema-presence gate (PR #47) would let it proceed once the bind
-  is fixed.
+- Now unblocked by v1.3.1 (signed+sealed bind) AND PR #47 (BadSuccessor
+  schema-presence gate). When dc25 comes back up, run `--all --v2 -k`
+  and diff per-module output against the Samba run — they should
+  match except where Windows-only schema/groups legitimately differ
+  (Key Admins, dMSA classes, etc.).
 
 ## What's next
 
@@ -95,16 +114,13 @@ the specific blocker.
   chain (certipy), 4 deterministic steps, output (NT hash + cert) is
   reusable in subsequent chains.
 
-### kerb-map v1.3.x follow-ups (still here, deferred from v1.3.0)
+### kerb-map v1.3.x follow-ups (deferred from v1.3.0/v1.3.1)
 None of these are blockers — pick up only if a real engagement
 surfaces them or the user redirects.
 
-1. **ldap3 GSSAPI signing layer.** Library limit at
-   `ldap3/protocol/sasl/kerberos.py` L216 hard-codes
-   `NO_SECURITY_LAYER`. Real fix is upstream-ldap3; until then
-   PR #46's hint is the operator-facing answer. If the upstream
-   fix lands, the hint can be replaced with an actually-working
-   SASL bind.
+1. ~~**ldap3 GSSAPI signing layer.**~~ **Closed in v1.3.1.** Upstream
+   ldap3 2.10.2rc4 wired up `session_security`; kerb-map now passes
+   `ENCRYPT` on SIGNED+Kerberos. Real bind, not just a hint.
 2. **RODC integration test path.** See above. If a future operator
    gets a working RODC, run `kerb-map --all --v2` against it and
    verify: yellow banner fires, partial-result behaviour degrades
@@ -117,6 +133,13 @@ surfaces them or the user redirects.
    JSON output schema may need adjustments based on what the
    consumer actually wants. Prefer landing schema changes in
    kerb-map (one source of truth) over wrapping with adapters.
+5. **Channel-binding-required (CBT) Windows estates.** Untested.
+   v1.3.1's signed+sealed SASL bind likely doesn't satisfy CBT —
+   ldap3 doesn't compute the channel-binding token for SASL/GSSAPI
+   either. Confirming this needs a Windows DC with the "LDAP server
+   channel binding token requirements = Always" GPO set. Fix path
+   if confirmed: probably upstream-ldap3 again, or scan from a
+   Windows host with native LDAP.
 
 ## Files of interest if resuming
 
@@ -145,8 +168,11 @@ without a new signal:
 - The hygiene auditor SID-based group lookups (PR #43). Locale-
   portability is fixed; CN-based lookups would re-introduce the
   German / French AD silent-failure.
-- The hardened-LDAP hint message wording (PR #46). Operators have
-  read it; rewording would force them to relearn the workaround.
+- The hardened-LDAP hint message wording (PR #46, refined in
+  v1.3.1). Operators have read it; further rewording would force
+  them to relearn the workaround. v1.3.1 only changed it because
+  the *workaround changed* — `-k` actually works now, so the hint
+  has to say that.
 
 ## Cleanup state
 

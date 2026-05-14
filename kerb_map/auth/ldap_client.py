@@ -14,6 +14,7 @@ import time
 
 from ldap3 import (
     ALL,
+    ENCRYPT,
     KERBEROS,
     NTLM,
     SASL,
@@ -126,31 +127,43 @@ class LDAPClient:
             return conn
 
         # Detect the hardened-estate signature: every transport bind
-        # rejected with strongerAuthRequired or invalidCredentials in
-        # a TLS-handshake-failed shape. This is a library-level
-        # limitation in ldap3 2.9.x — its GSSAPI SASL bind hard-codes
-        # NO_SECURITY_LAYER (see ldap3/protocol/sasl/kerberos.py L216),
-        # so the server's "you must sign" requirement can't be
-        # satisfied by any transport when no LDAPS cert is available.
-        # Surface an actionable error rather than the cryptic chain.
-        # Field gap surfaced by the v1.3 sprint hardened-GPO test.
+        # rejected with strongerAuthRequired, or TLS-handshake-failed
+        # shaped errors on the LDAPS path. The TRANSPORT_SIGNED path
+        # now negotiates session encryption (Kerberos GSS-wrap, via
+        # ldap3 >= 2.10.2rc4) and *should* satisfy a signing-required
+        # DC — but only when -k / use_kerberos is set. Without
+        # Kerberos, every NTLM-flavoured transport will still get
+        # strongerAuthRequired against a hardened DC.
         joined = " ".join(errors).lower()
-        if (
+        hardened_signature = (
             "strongerauthrequired" in joined
             or ("invalidcredentials" in joined and "tls" not in joined and "wrap" not in joined)
             or ("connection reset" in joined and "ssl" in joined)
-        ):
+        )
+        if hardened_signature and not use_kerberos:
             hint = (
                 "\n\n[hint] every transport rejected with a hardened-LDAP "
                 "signature. The DC likely requires signed LDAP binds (\"LDAP "
-                "server signing requirements = Required\"). ldap3's GSSAPI "
-                "SASL bind doesn't negotiate signing layers (library-level "
-                "limit; tracked as a v1.3.x follow-up). Workarounds:\n"
+                "server signing requirements = Required\"). NTLM-only binds "
+                "can't satisfy that without TLS. Workarounds:\n"
+                "  - re-run with `-k` and a valid TGT (kinit, or "
+                "KRB5CCNAME=...). The signed SASL/Kerberos transport "
+                "negotiates GSS encryption and is accepted by hardened DCs.\n"
                 "  - enroll an LDAPS cert on the DC (AD CS or any CA cert "
-                "with the DC FQDN as SAN). LDAPS = TLS = signing layer "
-                "the server accepts.\n"
-                "  - scan from a domain-joined Windows host using kerb-map "
-                "via WSL — the host's native LDAP client handles signing."
+                "with the DC FQDN as SAN) — LDAPS' TLS satisfies the "
+                "signing requirement."
+            )
+        elif hardened_signature and use_kerberos:
+            # Kerberos was attempted, signed-transport still failed. That
+            # means the bind couldn't acquire a service ticket or the SPN
+            # didn't match — point operator at the Kerberos layer.
+            hint = (
+                "\n\n[hint] hardened DC + Kerberos bind both failed. The "
+                "signed SASL transport tried GSS-encrypted bind but couldn't "
+                "complete. Likely: no valid TGT (run `klist`; `kinit "
+                "user@REALM` if empty), SPN mismatch (kerb-map resolves "
+                "ldap/<host> — check the DC has an `ldap/<dns_hostname>` "
+                "SPN), or krb5.conf doesn't point at this realm's KDCs."
             )
         else:
             hint = ""
@@ -183,6 +196,15 @@ class LDAPClient:
 
         if use_kerberos:
             auth_kwargs = dict(authentication=SASL, sasl_mechanism=KERBEROS)
+            # session_security=ENCRYPT enables GSS-wrap on the bound
+            # connection (ldap3 >= 2.10.2rc4). Required for hardened DCs
+            # that enforce LDAP signing on port 389 — without it the
+            # SIGNED transport bind succeeds but the DC drops every
+            # subsequent search with strongerAuthRequired. Only meaningful
+            # on plain-389; LDAPS / StartTLS already satisfy signing via
+            # TLS, and the kwarg would just double-wrap.
+            if transport == TRANSPORT_SIGNED:
+                auth_kwargs["session_security"] = ENCRYPT
         elif transport == TRANSPORT_LDAPS_SIMPLE:
             # SIMPLE bind needs user@REALM form. The credential is sent
             # in cleartext at the LDAP layer but TLS encrypts the
@@ -235,7 +257,8 @@ class LDAPClient:
             )
         elif transport == TRANSPORT_SIGNED:
             console.print(
-                f"[green][+] Signed LDAP bind (SASL/Kerberos) successful[/green]  {ident}"
+                f"[green][+] Signed+sealed LDAP bind (SASL/Kerberos, "
+                f"GSS-wrap) successful[/green]  {ident}"
             )
         elif transport == TRANSPORT_LDAPS_SIMPLE:
             tls_desc = self._describe_tls(conn)
