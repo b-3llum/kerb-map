@@ -117,18 +117,19 @@ def test_all_transports_failing_raises(monkeypatch):
         _build(monkeypatch, behaviour)
 
 
-def test_hardened_estate_bind_failure_surfaces_actionable_hint(monkeypatch):
+def test_hardened_estate_without_kerberos_hints_at_dash_k(monkeypatch):
     """Field gap from the v1.3 sprint hardened-GPO test: with
     ``LDAPServerIntegrity = 2`` (Require signing) on the DC, every
-    transport fails — TLS handshakes get reset (no LDAPS cert), plain
-    NTLM gets ``strongerAuthRequired``. ldap3's GSSAPI SASL bind
-    hard-codes ``NO_SECURITY_LAYER`` so signing-required estates can't
-    be bound. Without an actionable hint the operator just sees a
-    cryptic per-transport error chain.
+    NTLM-flavoured transport fails — TLS handshakes get reset (no
+    LDAPS cert), plain NTLM gets ``strongerAuthRequired``.
 
-    Pin that the LDAPAuthError carries a hint mentioning ``signed``
-    bind requirement and at least one workaround so a refactor
-    doesn't silently drop it."""
+    With ldap3 >= 2.10.2rc4 the SIGNED SASL/Kerberos transport
+    negotiates GSS-encrypted binds and *does* satisfy hardened DCs —
+    but only when ``-k`` is set. Without Kerberos, the right
+    actionable hint is to enable it.
+
+    Pin that the LDAPAuthError carries a hint pointing the operator
+    at ``-k`` and the LDAPS-cert workaround."""
     from ldap3.core.exceptions import LDAPBindError
 
     def behaviour(transport):
@@ -146,8 +147,32 @@ def test_hardened_estate_bind_failure_surfaces_actionable_hint(monkeypatch):
     with pytest.raises(LDAPAuthError) as ei:
         _build(monkeypatch, behaviour)
     msg = str(ei.value).lower()
-    assert "signed" in msg
+    assert "-k" in msg
     assert "ldaps cert" in msg or "ldaps" in msg
+
+
+def test_hardened_estate_with_kerberos_failure_hints_at_kerberos_layer(monkeypatch):
+    """When Kerberos was attempted but the SIGNED transport itself
+    couldn't complete the GSS-encrypted bind (e.g. no TGT, SPN
+    mismatch), the right hint points at the Kerberos layer rather
+    than telling the operator to enable -k they already had on."""
+    from ldap3.core.exceptions import LDAPBindError
+
+    def behaviour(transport):
+        if transport in (TRANSPORT_LDAPS, TRANSPORT_LDAPS_SIMPLE):
+            raise LDAPSocketOpenError("ssl wrapping error: connection reset by peer")
+        if transport == TRANSPORT_STARTTLS:
+            raise LDAPSocketOpenError("startTLS failed - unavailable")
+        if transport == TRANSPORT_SIGNED:
+            raise LDAPBindError("kerberos: no credentials cache found")
+        raise LDAPBindError("automatic bind not successful - strongerAuthRequired")
+
+    with pytest.raises(LDAPAuthError) as ei:
+        _build(monkeypatch, behaviour, use_kerberos=True)
+    msg = str(ei.value).lower()
+    assert "klist" in msg or "tgt" in msg or "kinit" in msg
+    # Don't redundantly tell them to "use -k" when -k was already on.
+    assert "re-run with `-k`" not in msg
 
 
 def test_normal_socket_failures_do_not_get_hardened_hint(monkeypatch):
@@ -186,6 +211,48 @@ def test_ldaps_simple_succeeds_when_ntlm_paths_rejected(monkeypatch):
     # SIGNED is skipped since use_kerberos defaults to False.
     assert TRANSPORT_LDAPS_SIMPLE in attempted
     assert client.transport_used == TRANSPORT_LDAPS_SIMPLE
+
+
+def test_signed_transport_passes_session_security_encrypt(monkeypatch):
+    """The whole point of v1.3.x follow-up #1: TRANSPORT_SIGNED must
+    pass session_security=ENCRYPT to ldap3.Connection so the bound
+    socket gets GSS-wrapped. Without it, hardened DCs accept the bind
+    but drop every subsequent search with strongerAuthRequired —
+    silently incomplete results, the worst kind of failure.
+
+    Verify by intercepting Connection() and checking the kwarg lands
+    on the SIGNED path (and only there — TLS transports already have
+    signing via the channel)."""
+    from ldap3 import ENCRYPT
+
+    captured: dict = {}
+
+    def fake_connection(server, *args, **kwargs):
+        captured["kwargs"] = kwargs
+        m = MagicMock()
+        m.bound = True
+        return m
+
+    def fake_server(*args, **kwargs):
+        return MagicMock()
+
+    monkeypatch.setattr(lc, "Connection", fake_connection)
+    monkeypatch.setattr(lc, "Server", fake_server)
+    monkeypatch.setattr(LDAPClient, "_announce_bind", lambda *a, **k: None)
+
+    LDAPClient(
+        dc_ip="10.0.0.1", domain="corp.local", username="tester",
+        use_kerberos=True, transport=TRANSPORT_SIGNED,
+    )
+    assert captured["kwargs"].get("session_security") == ENCRYPT
+
+    # And NOT on a TLS transport — double-wrap is wasteful.
+    captured.clear()
+    LDAPClient(
+        dc_ip="10.0.0.1", domain="corp.local", username="tester",
+        use_kerberos=True, transport=TRANSPORT_LDAPS,
+    )
+    assert "session_security" not in captured["kwargs"]
 
 
 def test_ldaps_simple_skipped_for_pth(monkeypatch):

@@ -2,6 +2,51 @@
 
 All notable changes to kerb-map will be documented in this file.
 
+## [1.3.1] — 2026-05
+
+Hardened-LDAP estates now bind for real. v1.3.0 shipped an actionable
+hint when every transport rejected with `strongerAuthRequired`; v1.3.1
+turns that hint into an actually-working bind on the Kerberos path.
+
+### Headline fix
+
+- **Hardened-LDAP estates now bind via signed+sealed SASL/Kerberos.**
+  ldap3 2.9.x hard-coded `NO_SECURITY_LAYER` in its GSSAPI bind, so
+  signing-required DCs accepted the SASL handshake then dropped every
+  subsequent search — silent partial result. Upstream ldap3 2.10.2rc4
+  wired up the `session_security` kwarg
+  (`ldap3/protocol/sasl/kerberos.py::_common_process_end_token_get_security_layers`),
+  and kerb-map now passes `session_security=ENCRYPT` on the SIGNED
+  transport when Kerberos is used. Result: hardened DCs accept the
+  GSS-wrapped bind and every subsequent paged search.
+
+  The v1.3.0 hint message is now split: hardened DC + no `-k` →
+  suggests re-running with `-k` (the path that actually works);
+  hardened DC + `-k` already on → points at the Kerberos layer
+  (`klist`, `kinit`, SPN, krb5.conf) rather than redundantly telling
+  the operator to enable a flag they already had on.
+
+### Dependency
+
+- `ldap3 >= 2.10.2rc4` (was `>= 2.9.1`). Upstream still tags the
+  2.10 line as RC, but it's been public since 2025 and is the only
+  release line that carries the GSSAPI session-encryption fix.
+
+### Tests
+
+- `test_signed_transport_passes_session_security_encrypt` — pins
+  that SIGNED+Kerberos passes `session_security=ENCRYPT` to
+  `Connection`, and that TLS transports don't (double-wrap waste).
+- `test_hardened_estate_without_kerberos_hints_at_dash_k` — renamed
+  + tightened from the v1.3.0 generic-hint test; pins the `-k`
+  workaround appears.
+- `test_hardened_estate_with_kerberos_failure_hints_at_kerberos_layer`
+  — new; pins the with-Kerberos hint path mentions klist/kinit/TGT
+  and does NOT redundantly tell the operator to enable `-k`.
+
+Closes v1.3.x follow-up #1 in `RESUME-HERE.md`. Workaround text from
+PR #46 is replaced by an actually-working bind.
+
 ## [1.3.0] — 2026-04
 
 Environment-coverage release. Built and ran kerb-map end-to-end against
