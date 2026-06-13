@@ -2,6 +2,25 @@
 
 All notable changes to kerb-map will be documented in this file.
 
+## [Unreleased]
+
+### Changed
+
+- **kerb-chain extracted to its own repository.** The attack-chain
+  orchestrator (`kerb_chain/` Python package, the `kerb-chain-rs` Rust
+  port, the `tests/test_kerb_chain.py` suite, and the v0 scope doc) was
+  removed from kerb-map and now lives in `b-3llum/kerb-chain`. kerb-map
+  no longer ships the `kerb-chain` console script or packages
+  `kerb_chain*`. The scanner's JSON output remains the orchestrator's
+  input contract — only the code moved, the consumer relationship is
+  unchanged. Test count drops 693 → 664 (the 29 orchestrator tests
+  moved with the code). `pyproject.toml` description, scripts, and
+  package discovery updated accordingly.
+
+### Removed
+
+- Stale `up.pid` runtime artifact (now gitignored).
+
 ## [1.3.1] — 2026-05
 
 Hardened-LDAP estates now bind for real. v1.3.0 shipped an actionable

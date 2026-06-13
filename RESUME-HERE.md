@@ -8,10 +8,13 @@ next.
 - **Latest tag**: `v1.3.1` (pushed to origin; v1.3.0 + the GSSAPI
   signing-layer fix from v1.3.x follow-up #1 — hardened DCs now bind
   for real instead of falling out via the hint).
-- **Branch**: `main`, clean working tree (only `files/` and `up.pid`
-  are untracked, both pre-date this work).
+- **Branch**: `main`, clean working tree (only `files/` is untracked,
+  pre-dates this work; the stale `up.pid` was removed + gitignored
+  during the kerb-chain extraction).
 - **CI**: green on every PR through #47 + the v1.3.1 follow-up PR.
-- **Test count**: 693 pass / 2 skipped.
+- **Test count**: 664 pass / 2 skipped (was 693; the 29 `kerb_chain`
+  tests left with the code when kerb-chain was extracted to its own
+  repo — see "What's next → kerb-chain").
 
 ## What v1.3.1 shipped (this session)
 
@@ -104,11 +107,20 @@ the specific blocker.
 
 ## What's next
 
-### kerb-chain (separate repo)
-- Scope doc was written this session, then **moved to its own repo**
-  at the user's direction. The doc no longer lives here.
+### kerb-chain (separate repo) — extraction completed
+- The kerb-chain code (Python `kerb_chain/`, the Rust port
+  `kerb-chain-rs/`, the 29-test `tests/test_kerb_chain.py`, and the
+  scope doc) **was extracted out of kerb-map into its own repo**:
+  `b-3llum/kerb-chain` (private). Until this session that repo existed
+  but was *empty* — the code still lived here and the prior
+  RESUME-HERE wrongly claimed it had moved. It has now actually moved:
+  the repo is populated (Python package builds/tests/lints standalone,
+  29 tests pass) and kerb-map no longer carries or packages it.
+- kerb-map's source still *references* kerb-chain in doc-comments as
+  the downstream JSON consumer — that's the output contract, kept on
+  purpose. There is no code dependency in either direction.
 - Next session for that work happens in the kerb-chain repo, starting
-  from the scope decisions in that doc.
+  from the scope decisions in `docs/kerb-chain-scope-v0.md` *there*.
 - v0.1 recommendation in the scope doc: **Shadow Credentials (write
   access)** as the single chain-target. Rationale: clean single-tool
   chain (certipy), 4 deterministic steps, output (NT hash + cert) is
@@ -177,7 +189,8 @@ without a new signal:
 ## Cleanup state
 
 Sessions through v1.3.1 left:
-- Working tree clean (only pre-existing `files/` and `up.pid` untracked).
+- Working tree clean (only pre-existing `files/` untracked; the stale
+  `up.pid` runtime artifact was removed and added to `.gitignore`).
 - **Origin pruned to `main` only.** 15 merged feature branches (all
   squash-merge artefacts of closed PRs #18–#38) deleted from origin
   after v1.3.1 shipped. PRs preserve every deleted branch's diff +
