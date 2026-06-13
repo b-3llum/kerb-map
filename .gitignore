@@ -21,3 +21,4 @@ venv/
 .idea/
 lab/.vagrant/
 *.coverage
+up.pid
