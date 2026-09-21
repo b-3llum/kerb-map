@@ -4,6 +4,22 @@ All notable changes to kerb-map will be documented in this file.
 
 ## [Unreleased]
 
+### Added
+
+- **`-o html` — self-contained HTML report exporter.** A single-file,
+  no-external-assets report for a client-facing deliverable or
+  browser-print-to-PDF. Layout mirrors the Markdown exporter (header,
+  per-severity summary tiles, ranked top-priorities table, findings
+  grouped by category, domain-info appendix) and stays in lock-step
+  with it. Every dynamic value — account names, LDAP descriptions,
+  SPNs, next-step commands — is routed through `html.escape`, so a
+  finding carrying attacker-controlled markup (e.g. a `description` of
+  `<script>…`) renders as inert text rather than executing when the
+  operator opens the report. Ships with `tests/test_html_export.py`
+  (15 tests, including the injection-safety case). `README.md` version
+  badge reconciled to `2.0.0` to match `pyproject.toml` (the badge had
+  lagged at `1.3.1`).
+
 ### Changed
 
 - **kerb-chain extracted to its own repository.** The attack-chain
