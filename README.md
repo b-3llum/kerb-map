@@ -4,7 +4,7 @@
 
 **Active Directory Kerberos Attack Surface Mapper**
 
-![version](https://img.shields.io/badge/version-1.3.1-blue)
+![version](https://img.shields.io/badge/version-2.0.0-blue)
 ![status](https://img.shields.io/badge/status-BETA-orange)
 ![python](https://img.shields.io/badge/python-3.10+-blue)
 ![platform](https://img.shields.io/badge/platform-Linux-lightgrey)
@@ -133,6 +133,7 @@ All LDAP queries are read-only. RPC-based CVE probes that generate Windows event
     -o bloodhound-ce           Real BloodHound CE 5.x ingestible zip + KerbMap edges
     -o csv                     One row per priority target (spreadsheet)
     -o markdown                Operator report (drops into Obsidian)
+    -o html                    Self-contained report (client deliverable / print-to-PDF)
     -o bloodhound-lite         Legacy custom JSON shape (NOT BH-ingestible)
 
 ### Other
@@ -343,7 +344,7 @@ kerb-map --show-scan 3
 
 | Flag | Description |
 |---|---|
-| `-o {json, bloodhound-ce, bloodhound-lite, csv, markdown}` | File output format |
+| `-o {json, bloodhound-ce, bloodhound-lite, csv, markdown, html}` | File output format |
 | `--outfile NAME` | Custom output filename |
 | `--top N` | Show top N priority targets (default 15) |
 | `-v / --verbose` (count) | `-v` adds debug, `-vv` adds raw LDAP filter logging |
