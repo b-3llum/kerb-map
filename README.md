@@ -78,8 +78,6 @@ Five things an operator should know before scanning a real estate:
 - 84%+ unit-test coverage on `kerb_map/modules/` (`hygiene_auditor`
   at 100%)
 
-**Full scope-vs-shipped accounting:** `docs/v1.2-known-gaps.md`.
-
 **Found a bug?** Open an issue with the full `--v2 -vv` log + the
 DC's OS / functional level. The development pattern so far is "every
 new environment surfaces ~3–10 silent bugs"; that loop is open and

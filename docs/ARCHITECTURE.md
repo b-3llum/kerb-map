@@ -165,7 +165,7 @@ kerb_map/
   output/
     logger.py                Rich-themed Logger singleton with -q/-v/-vv levels
     reporter.py              Rich tables (priority, CVE, hygiene, etc.)
-    exporter.py              JSON / Markdown / CSV / BloodHound-Lite
+    exporter.py              JSON / Markdown / CSV / HTML / BloodHound-Lite
     bloodhound_ce.py         Real BH CE 5.x ingestible zip + KerbMap* edges
 
   db/
@@ -173,8 +173,7 @@ kerb_map/
 
 tests/                       pytest tree mirroring kerb_map/
 lab/                         Vagrantfile + provision_dc.sh + seed_vulnerabilities.sh
-docs/                        This file + MODULE_AUTHORING.md + ENGAGEMENT_GUIDE.md +
-                             v1.2-known-gaps.md
+docs/                        This file + MODULE_AUTHORING.md + ENGAGEMENT_GUIDE.md
 ```
 
 ## Test mocking pattern
